@@ -67,4 +67,4 @@ logs/
 *.pyc
 
 # ── Internal planning docs (keep off public repo) ────────────────────────────
-BACKLOG.md
+*.md
