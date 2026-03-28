@@ -28,6 +28,7 @@ from neo4j import AsyncDriver, AsyncManagedTransaction
 from ..config import settings
 from ..models.requests import WriteRequest
 from .segment_service import check_and_create_segments
+from .embedding_service import embed_new_content
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 async def write_conversation_to_graph(
     driver: AsyncDriver,
     request: WriteRequest,
+    openai_client=None,
+    redis_client=None,
 ) -> None:
     """
     Main write pipeline. Called as a FastAPI BackgroundTask.
@@ -55,6 +58,8 @@ async def write_conversation_to_graph(
       4. Increment Conversation.messageCount by actual_new_count
       5. Build NEXT_MESSAGE chain within batch + connect first new msg to prior chain
       6. Check segmentation threshold → create Segment nodes if needed
+      7. Compute and store embeddings for new Segments and Messages (Phase 2)
+         Skipped if openai_client is None — verbatim storage is already safe.
 
     If any step fails, logs full context and returns (202 already sent to client).
     """
@@ -84,13 +89,24 @@ async def write_conversation_to_graph(
                     now,
                 )
 
-            # Step 5: Segmentation
+            # Step 6: Segmentation
             await check_and_create_segments(
                 session,
                 conversation_id=request.conversationId,
                 user_id=request.userId,
                 provider=request.provider,
             )
+
+        # Step 7: Embeddings — runs outside the session block so it can open
+        # its own sessions per segment/message (avoids holding one session open
+        # for the full duration of OpenAI API calls).
+        # No-op when openai_client is None.
+        await embed_new_content(
+            driver=driver,
+            openai_client=openai_client,
+            redis_client=redis_client,
+            conversation_id=request.conversationId,
+        )
 
         logger.info(
             "write_complete conversation_id=%s messages_received=%d "

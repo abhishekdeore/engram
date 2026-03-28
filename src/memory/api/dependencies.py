@@ -51,7 +51,31 @@ def get_neo4j_driver(request: Request):
     return driver
 
 
+# ── OpenAI client accessor ────────────────────────────────────────────────────
+
+def get_openai_client(request: Request):
+    """
+    Retrieve the AsyncOpenAI client from app.state.
+    Returns None if OPENAI_API_KEY was not configured — callers must handle
+    the None case gracefully (fall back to full-text search, skip embedding).
+    """
+    return getattr(request.app.state, "openai_client", None)
+
+
+# ── Redis client accessor ─────────────────────────────────────────────────────
+
+def get_redis_client(request: Request):
+    """
+    Retrieve the async Redis client from app.state.
+    Returns None if Redis was not configured or failed to connect on startup.
+    Callers must treat None as "cache unavailable" and proceed without it.
+    """
+    return getattr(request.app.state, "redis_client", None)
+
+
 # ── Type aliases for use in route signatures ──────────────────────────────────
 
 CurrentUserId = Annotated[str, Depends(get_current_user_id)]
 Neo4jDriver   = Annotated[object, Depends(get_neo4j_driver)]
+OpenAIClient  = Annotated[object, Depends(get_openai_client)]
+RedisClient   = Annotated[object, Depends(get_redis_client)]

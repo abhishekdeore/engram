@@ -228,16 +228,105 @@ Hub-and-spoke segmentation model:
 
 ---
 
-## Planned — Phase 2 (Not Yet Implemented)
+## Phase 2 — Embedding Pipeline & Semantic Query
 
-| Feature | Description |
-|---------|-------------|
-| Embedding pipeline | Generate `text-embedding-3-small` vectors for each `Segment` via OpenAI; cache in Redis to avoid re-embedding |
-| Vector search | `GET /memory/search` — semantic retrieval using `db.index.vector.queryNodes` on `index_vector_segment` |
-| Date pre-filter | LLM resolves relative dates to `YYYY-MM-DD`; query filters `(userId, startedAt)` before vector search |
-| Ranked retrieval | With date filter: semantic 80% + date match 10% + context 10%; without: semantic 70% + recency 20% + context 10% |
-| Read endpoint | `GET /memory/read/:conversationId` — return full verbatim conversation |
-| Chunk model | Sub-segment `Chunk` nodes for fine-grained retrieval on very long segments |
+### Goal
+Add a semantic retrieval path: embed conversations using OpenAI `text-embedding-3-small`, store vectors in Neo4j, and expose `POST /memory/query` for ranked, token-budget-aware memory retrieval. Full-text keyword search is always available as a fallback. Zero hallucination risk — the pipeline never calls a generative model.
+
+### What Was Implemented
+
+#### New Models (`src/memory/models/requests.py`)
+- `QueryRequest` — validated query payload with date filtering, topK, tokenBudget, optional provider filter
+  - `date` and `dateFrom/dateTo` are mutually exclusive (Pydantic `model_validator`)
+  - `effective_date_from` / `effective_date_to` properties resolve both forms to a canonical date range
+- `MessageResult` — verbatim message turn (messageId, role, content, timestamp, tokenCount)
+- `ConversationResult` — grouped messages from one conversation with relevance score
+- `QueryResponse` — full response: results, totalResults, tokenCount, queryLatencyMs, dateFilterApplied, searchMode
+
+#### Embedding Service (`src/memory/services/embedding_service.py`)
+Complete vectorisation pipeline:
+- `embed_new_content(driver, openai_client, redis_client, conversation_id)` — called as final step of write BackgroundTask; no-op if `openai_client` is None
+- `get_query_embedding(openai_client, redis_client, query_text)` — used by query pipeline; returns None on failure (never raises)
+- **Idempotency**: only embeds nodes where `embedding IS NULL` — safe to retry
+- **Caching**: Redis keyed by `SHA-256(content)`, TTL 3600s; fully optional (graceful degradation if Redis absent or unreachable)
+- **Long content handling**: content > 8191 tokens → head+tail averaging (first 4096 + last 4096 tokens), then L2-normalise → deterministic, no generative model involved
+- **Chunk nodes**: messages > 512 tokens → 512-token windows with 100-token overlap → `Chunk` nodes linked via `HAS_CHUNK`; chunk vector search always returns the parent `Message`, never the chunk itself
+- **Token counting**: `tiktoken.get_encoding("cl100k_base")` — exact token counts matching OpenAI's tokeniser
+
+#### Query Service (`src/memory/services/query_service.py`)
+8-step retrieval pipeline:
+1. **Date pre-filter** (parallel with step 2) — query `(Conversation.userId, Conversation.startedAt)` composite index; returns candidate `conversationId` set; empty set + date filter = early return (zero results)
+2. **Query embedding** (parallel with step 1) — embed query text; `None` if OpenAI unavailable
+3. **Three parallel vector searches** — separate Neo4j sessions for Segment, Message, and Chunk indexes via `asyncio.gather`; oversampling `topK × 10` before `userId` post-filter (MVCC limitation workaround)
+4. **Deduplicate** by `messageId`, keep highest cosine score
+5. **Context expansion** — fetch ±2 neighbours per matched message via `messageIndex` range
+6. **Ranking** — two modes:
+   - No date filter: `0.7×cosine + 0.2×recency + 0.1×context_bonus`
+   - Date filter: `0.8×cosine + 0.1×date_match + 0.1×context_bonus`
+   - Recency: piecewise linear decay (0d→1.0, 7d→0.9, 30d→0.7, 90d→0.5, 365+d→0.2)
+7. **Token-budget assembly** — skip messages that would exceed budget; never truncates mid-message; group by conversation
+8. **Return** `QueryResponse` with `searchMode: "vector" | "fulltext" | "empty"`
+- **Full-text fallback**: triggered when no vector hits ≥ 0.70 threshold, or when OpenAI is unavailable
+
+#### Write Service (`src/memory/services/write_service.py`) — Updated
+- Signature extended: `write_conversation_to_graph(driver, request, openai_client=None, redis_client=None)`
+- Step 7 added (after segmentation): `await embed_new_content(...)` — completely optional; verbatim storage (Phase 1) is already committed before this runs
+
+#### API Layer Updates
+- `src/memory/api/main.py` — lifespan now initialises three clients: Neo4j (required, fail-fast), OpenAI (optional if `OPENAI_API_KEY` set), Redis (optional if `REDIS_URL` set); shutdown closes all open connections
+- `src/memory/api/dependencies.py` — added `get_openai_client`, `get_redis_client` accessors + `OpenAIClient`, `RedisClient` type aliases
+- `src/memory/api/routes/memory.py` — write route now injects and forwards `openai_client` and `redis_client` to background task
+- `src/memory/api/routes/query.py` — new file; `POST /memory/query`; same JWT + userId-match guard as write route
+
+---
+
+### Phase 2 Bugs Encountered & Fixed
+
+#### Bug P2-1 — `_embed_long_or_short` referenced but not defined
+
+- **Root cause**: In `_embed_segments`, the loop called `await _embed_long_or_short(...)` — a function name that was planned during design but never written. The long/short branching for segments is already handled inside `_call_openai_embedding` (which checks token count and delegates to `_head_tail_embedding` when needed). The named helper was a dead reference.
+- **Fix**: Replaced `_embed_long_or_short(openai_client, redis_client, text=..., token_count=...)` with `_get_or_compute_embedding(openai_client, redis_client, content)`. The `token_count` variable was also removed as it became unused.
+
+#### Bug P2-2 — Cypher `NOT IN` syntax rejected by Neo4j 2026.x
+
+- **Root cause**: The context expansion query used `AND neighbor.messageId NOT IN $messageIds`. Neo4j 2026.x (Bolt 6.x) no longer accepts `NOT IN` as a compound infix operator in a `WHERE` clause.
+- **Fix**: Changed to `AND NOT (neighbor.messageId IN $messageIds)`, which is valid in all supported Neo4j versions.
+
+#### Bug P2-3 — `all()` predicate removed in Neo4j 2026.x
+
+- **Root cause**: `test_long_message_produces_chunk_nodes` used `all(ch.embedding IS NOT NULL)` in a `RETURN` clause. The `all()` list predicate function was removed in Neo4j 2026.x.
+- **Fix** (test-only): Replaced with `count(ch.embedding) = count(ch) AS allEmbedded`. `count(property)` counts non-null values; comparing it to `count(node)` (which counts all) is equivalent.
+
+#### Bug P2-4 — Date filter with zero matches not returning empty results
+
+- **Root cause**: When `_date_prefilter_tx` returned an empty list (no conversations matched the date range), `_candidate_filter_clause` returned an empty string (no filter), so the vector searches ran against **all** conversations for that user, ignoring the date filter entirely.
+- **Fix**: After `asyncio.gather(candidate_ids_task, embed_task)`, added an early-return guard: if `request.has_date_filter and len(candidate_ids) == 0`, immediately return an empty `QueryResponse(searchMode="empty")`.
+
+---
+
+### Phase 2 — Test Coverage Summary
+
+**`tests/test_embedding_pipeline.py`** (14 tests, 1 skipped)
+
+| Class | Tests | What Is Covered |
+|-------|-------|----------------|
+| `TestTokenUtilities` | 4 | `_count_tokens` accuracy, empty string, single-chunk short text, multi-chunk overlap |
+| `TestEmbeddingComputation` | 8 (1 skip) | No-op without OpenAI client, segment embedding stored in Neo4j, short message embedding on Message node, long message → Chunk nodes (not Message.embedding), Redis cache hit prevents duplicate API calls *(skipped: Redis not in CI)*, query embedding dimensionality, None on API error, idempotency (second call makes no new API calls) |
+| `TestHeadTailEmbedding` | 2 | Head+tail triggered for oversized content (one batched API call with 2 texts), result is L2-normalised |
+
+**`tests/test_query_api.py`** (33 tests)
+
+| Class | Tests | What Is Covered |
+|-------|-------|----------------|
+| `TestQueryAuth` | 4 | Missing token (401/403), invalid token (401), userId mismatch (403), valid token succeeds |
+| `TestQueryValidation` | 5 | Empty query, `date` + `dateFrom` mutual exclusivity, `dateTo` without `dateFrom`, invalid date format, topK out of range |
+| `TestVectorSearch` | 6 | Quantum query → conv A; cooking query → conv B; response structure; verbatim content; `searchMode="vector"`; no cross-user data leakage |
+| `TestFulltextFallback` | 3 | Fulltext used when OpenAI unavailable; fulltext triggered by zero vector hits below threshold; `searchMode="empty"` when nothing matches |
+| `TestDateFilter` | 4 | Out-of-range conversation excluded; single-day `date` filter; `dateFilterApplied=False` without filter; empty results when date range matches nothing *(P2-4 regression)* |
+| `TestTokenBudget` | 3 | Budget caps tokenCount; messages never truncated mid-content; larger budget returns at least as many messages |
+| `TestRanking` | 3 | Results ordered score-descending; scores in \[0,1\]; date-filter and no-filter modes produce different scores |
+| `TestContextExpansion` | 1 | Neighbour messages appear alongside direct match |
+| `TestResponseShape` | 4 | ConversationResult fields present; MessageResult fields and types; latency > 0; tokenCount == sum of message tokenCounts |
 
 ---
 

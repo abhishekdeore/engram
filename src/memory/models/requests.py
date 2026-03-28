@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
@@ -90,6 +91,120 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "down"]
     neo4j: Literal["connected", "disconnected"]
     version: str
+
+
+# ── Query ─────────────────────────────────────────────────────────────────────
+
+class QueryRequest(BaseModel):
+    """
+    Semantic memory query request.
+
+    Date filtering:
+      Use `date` for a single day, OR `dateFrom`/`dateTo` for a range.
+      They are mutually exclusive.  All values must be YYYY-MM-DD strings.
+      The LLM client is responsible for resolving relative expressions
+      ("yesterday", "last week") to absolute dates before calling this API.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    userId: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=2000)
+    topK: int = Field(default=5, ge=1, le=20)
+    tokenBudget: int = Field(
+        default=4000, ge=100, le=16000,
+        description="Maximum total tokens in the assembled response.",
+    )
+    providers: list[ProviderType] | None = Field(
+        default=None,
+        description="Restrict search to specific providers. None = all providers.",
+    )
+
+    # Date filters — mutually exclusive
+    date: str | None = Field(
+        default=None,
+        description="YYYY-MM-DD — search only conversations from this exact day.",
+    )
+    dateFrom: str | None = Field(
+        default=None,
+        description="YYYY-MM-DD — search conversations starting from this date (inclusive).",
+    )
+    dateTo: str | None = Field(
+        default=None,
+        description="YYYY-MM-DD — search conversations up to this date (inclusive).",
+    )
+    relativeHint: str | None = Field(
+        default=None,
+        description="The original natural-language hint ('last Tuesday'). Metadata only.",
+    )
+
+    @model_validator(mode="after")
+    def validate_date_fields(self) -> Self:
+        has_exact = self.date is not None
+        has_range = self.dateFrom is not None or self.dateTo is not None
+
+        if has_exact and has_range:
+            raise ValueError("Use either `date` or `dateFrom`/`dateTo`, not both.")
+
+        if self.dateTo is not None and self.dateFrom is None:
+            raise ValueError("`dateTo` requires `dateFrom`.")
+
+        for field_name, value in [
+            ("date", self.date),
+            ("dateFrom", self.dateFrom),
+            ("dateTo", self.dateTo),
+        ]:
+            if value is not None:
+                try:
+                    datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    raise ValueError(f"`{field_name}` must be YYYY-MM-DD format.")
+
+        return self
+
+    @property
+    def has_date_filter(self) -> bool:
+        return self.date is not None or self.dateFrom is not None
+
+    @property
+    def effective_date_from(self) -> str | None:
+        """Resolved start of date range (works for both `date` and `dateFrom`)."""
+        return self.date or self.dateFrom
+
+    @property
+    def effective_date_to(self) -> str | None:
+        """Resolved end of date range (works for both `date` and `dateTo`)."""
+        return self.date or self.dateTo
+
+
+class MessageResult(BaseModel):
+    """A single verbatim message turn in a query result."""
+    messageId: str
+    role: str
+    content: str
+    timestamp: str
+    tokenCount: int
+
+
+class ConversationResult(BaseModel):
+    """A group of verbatim messages from one conversation, with relevance score."""
+    score: float
+    conversationId: str
+    provider: str
+    model: str
+    conversationDate: str           # YYYY-MM-DD
+    conversationStartedAt: str      # ISO-8601 full timestamp
+    messages: list[MessageResult]
+
+
+class QueryResponse(BaseModel):
+    """Full response from POST /memory/query."""
+    results: list[ConversationResult]
+    totalResults: int
+    tokenCount: int                 # total tokens in assembled results
+    queryLatencyMs: float
+    dateFilterApplied: bool
+    searchMode: Literal["vector", "fulltext", "empty"]
 
 
 # ── Auth (development token generation) ──────────────────────────────────────
