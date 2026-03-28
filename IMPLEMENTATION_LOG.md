@@ -330,6 +330,86 @@ Complete vectorisation pipeline:
 
 ---
 
+---
+
+## Pre-Phase 3 Audit — Cross-Phase Review Findings
+
+Conducted after Phases 0, 1, and 2 were complete. The goal was to verify the three phases function correctly as a connected system. The review found bugs that exist in live code but are silent — no test fails, no exception is raised, no error is logged.
+
+### Priority classification
+
+| ID | Severity | Status | Description |
+|----|----------|--------|-------------|
+| P3-PRE-1 | **P0 — Fix before Phase 3** | ✅ Fixed | `totalTokens` inflates on every duplicate send |
+| P3-PRE-2 | **P0 — Fix before Phase 3** | ✅ Fixed | Long-message chunking re-embeds on every subsequent write |
+| P3-PRE-3 | **P0 — Fix before Phase 3** | ✅ Fixed | `providers` filter silently ignored in query pipeline |
+| P3-PRE-4 | **P1 — Fix before Phase 3** | ✅ Fixed | Settings/constants disconnect: embedding model hardcoded instead of read from `settings` |
+| P3-PRE-5 | **P1 — Fix before Phase 3** | ✅ Fixed | Redis URL defaults to non-empty string; always attempts connection |
+| P3-PRE-6 | **P1 — Fix before Phase 3** | ✅ Fixed | `constraint_segment_conversation_index` missing from `test_connection.py` |
+| P3-PRE-7 | **P1 — Fix before Phase 3** | ✅ Fixed | No end-to-end write→embed→query integration test |
+| P3-PRE-8 | **P2 — Fix during Phase 3** | ⬜ Pending | Version drift: `__init__.py` reports `0.1.0`, `main.py` declares `0.2.0` |
+| P3-PRE-9 | **P2 — Fix during Phase 3** | ⬜ Pending | JWT secret key has no production-safety validator in `Settings` |
+| P3-PRE-10 | **P3 — Technical debt** | ⬜ Pending | Dead async driver singleton in `db/connection.py` never used by FastAPI |
+| P3-PRE-11 | **P3 — Technical debt** | ⬜ Pending | `_candidate_filter_clause` hardcodes alias `node`; breaks on future search paths |
+
+---
+
+### Bug P3-PRE-1 — `Conversation.totalTokens` inflates on every duplicate send
+
+- **Root cause**: `_merge_conversation_tx` uses `ON MATCH SET c.totalTokens = c.totalTokens + $incomingTokens`. `incomingTokens` is the sum of ALL tokens in the incoming batch, including tokens for messages that already exist. Unlike `messageCount` (which was fixed in P1-4 using the `_isNew` sentinel), `totalTokens` was never given the same treatment.
+- **Impact**: After N resends of the same conversation, `totalTokens = N × actual_token_count`. Corrupts billing, analytics, and any downstream feature that reads this field.
+- **Fix**: Extend `_write_messages_tx` to sum `tokenCount` over `new_ids` only, returning `(actual_new_count, actual_new_tokens)`. Pass `actual_new_tokens` to `_bump_conversation_count_tx` and also increment `c.totalTokens` there. Remove `totalTokens` from the `ON MATCH SET` in `_merge_conversation_tx`.
+
+---
+
+### Bug P3-PRE-2 — Long-message chunking path is not idempotent
+
+- **Root cause**: `_get_unembedded_messages_tx` filters with `WHERE m.embedding IS NULL`. For messages longer than `CHUNK_THRESHOLD` tokens, the design intentionally stores `Message.embedding = NULL` and creates Chunk nodes instead. This means every subsequent call to `embed_new_content` re-fetches those long messages (still `NULL`), recomputes chunk embeddings via OpenAI, and overwrites existing chunk embeddings on MERGE MATCH.
+- **Impact**: Every write to a conversation containing long messages makes redundant OpenAI API calls and wastes quota. The `test_embed_new_content_idempotent` test uses a 4-token message and does not catch this.
+- **Fix**: Add `AND NOT EXISTS { MATCH (m)-[:HAS_CHUNK]->(:Chunk) }` to the WHERE clause in `_get_unembedded_messages_tx`. Add a dedicated test: long message, call `embed_new_content` twice, verify OpenAI is called exactly once.
+
+---
+
+### Bug P3-PRE-3 — `providers` filter accepted but never applied
+
+- **Root cause**: `QueryRequest.providers` is validated and present in the API contract. No search path in `query_service.py` applies it — not the segment search, message search, chunk search, fulltext fallback, or date pre-filter.
+- **Impact**: A client sending `providers=["chatgpt"]` receives results from all providers. The API contract is broken silently.
+- **Fix**: Add `AND (m.provider IN $providers OR $providers IS NULL)` (or equivalent) to all four search paths. Handle `providers=None` as "all providers" (no filter).
+
+---
+
+### Bug P3-PRE-4 — Embedding constants hardcoded, disconnected from `settings`
+
+- **Root cause**: `config.py` defines `embedding_model`, `embedding_dimensions`, and `embedding_cache_ttl_seconds` as configurable settings. `embedding_service.py` defines `EMBEDDING_MODEL = "text-embedding-3-small"`, `EMBEDDING_DIMS = 1536`, and `REDIS_TTL = 3600` as module-level constants and never imports from `settings`. Any change to `.env` is silently ignored by the service.
+- **Impact**: The Phase 0 configuration contract is broken by Phase 2. Operators cannot change the embedding model via environment without modifying source code.
+- **Fix**: Replace the three hardcoded constants with `settings.embedding_model`, `settings.embedding_dimensions`, and `settings.embedding_cache_ttl_seconds`.
+
+---
+
+### Bug P3-PRE-5 — Redis URL defaults to non-empty string
+
+- **Root cause**: `config.py` declares `redis_url: str = Field(default="redis://localhost:6379")`. The lifespan guard is `if settings.redis_url:`. Because the default is never empty, every deployment that does not set `REDIS_URL` in `.env` attempts a Redis connection, fails, logs a warning, and silently degrades. There is no clean "I don't want Redis" signal.
+- **Impact**: Noisy startup warnings on every local development run; no way to intentionally disable Redis caching without setting an env var.
+- **Fix**: Change default to `redis_url: str = Field(default="")`. The existing `if settings.redis_url:` guard then works as intended.
+
+---
+
+### Bug P3-PRE-6 — `constraint_segment_conversation_index` not verified in tests
+
+- **Root cause**: `test_connection.py::test_neo4j_constraints_exist` checks five uniqueness constraints but omits `constraint_segment_conversation_index`, which was added in Phase 1 to fix Bug P1-5 (duplicate Segment nodes). If this constraint is absent from the database, the MERGE-based duplicate prevention silently reverts to unsafe behavior. Also missing: `index_message_conversation_index` in the composite index test.
+- **Impact**: A misconfigured environment (e.g., after a database wipe and re-setup) gives no test failure but has a live concurrency bug.
+- **Fix**: Add both names to the respective `expected` sets in `test_connection.py`.
+
+---
+
+### Bug P3-PRE-7 — No end-to-end write→embed→query integration test
+
+- **Root cause**: All Phase 2 tests seed Neo4j directly, bypassing the write pipeline entirely. There is no test that exercises the full cross-phase flow: `POST /memory/write` → BackgroundTask fires → embeddings land in Neo4j → `POST /memory/query` returns the written conversation.
+- **Impact**: If `write_service.py` and `embedding_service.py` become misaligned (e.g., `userId` propagation, `tokenCount` conventions, `segmentId` naming), no test catches it.
+- **Fix**: Add `TestEndToEnd` class in a new `tests/test_end_to_end.py` file. Write a conversation via the FastAPI TestClient (BackgroundTasks run synchronously), mock OpenAI to return a fixed embedding, then query with the same embedding and verify verbatim content is returned.
+
+---
+
 ## Architecture Invariants (Never Violate)
 
 1. **Zero hallucination** — the memory pipeline never calls a generative model at any stage. All stored content is verbatim input from the user.

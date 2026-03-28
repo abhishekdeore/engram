@@ -73,19 +73,20 @@ async def write_conversation_to_graph(
             await session.execute_write(_merge_user_tx, request.userId, now)
             await session.execute_write(_merge_conversation_tx, request, now)
 
-            # Step 3: Atomic message write — returns count of genuinely new messages
-            actual_new_count = await session.execute_write(
+            # Step 3: Atomic message write — returns count and tokens of genuinely new messages
+            actual_new_count, actual_new_tokens = await session.execute_write(
                 _write_messages_tx,
                 request,
                 now,
             )
 
-            # Step 4: Increment conversation message count by actual new messages only
+            # Step 4: Increment conversation counters by actual new messages only
             if actual_new_count > 0:
                 await session.execute_write(
                     _bump_conversation_count_tx,
                     request.conversationId,
                     actual_new_count,
+                    actual_new_tokens,
                     now,
                 )
 
@@ -177,14 +178,13 @@ async def _merge_conversation_tx(
             c.startedAt     = $firstTimestamp,
             c.endedAt       = $lastTimestamp,
             c.messageCount  = 0,
-            c.totalTokens   = $incomingTokens,
+            c.totalTokens   = 0,
             c.segmentCount  = 0,
             c.isComplete    = false,
             c.createdAt     = $now
         ON MATCH SET
-            c.endedAt       = $lastTimestamp,
-            c.totalTokens   = c.totalTokens + $incomingTokens,
-            c.updatedAt     = $now
+            c.endedAt   = $lastTimestamp,
+            c.updatedAt = $now
         WITH c
         MATCH (u:User {userId: $userId})
         MERGE (u)-[:HAS_CONVERSATION]->(c)
@@ -195,7 +195,6 @@ async def _merge_conversation_tx(
         model=request.model,
         firstTimestamp=request.first_timestamp,
         lastTimestamp=request.last_timestamp,
-        incomingTokens=request.total_token_count,
         now=now,
     )
 
@@ -289,6 +288,9 @@ async def _write_messages_tx(
 
     new_ids: set[str] = {r["mid"] for r in records if r["isNew"] is True}
     actual_new_count = len(new_ids)
+    actual_new_tokens: int = sum(
+        msg.tokenCount for msg in messages if msg.messageId in new_ids
+    )
 
     # ── Step D: NEXT_MESSAGE chain within this batch (single round-trip) ──────
     # MERGE is idempotent — safe on duplicate sends.
@@ -335,27 +337,31 @@ async def _write_messages_tx(
             newIds=list(new_ids),
         )
 
-    return actual_new_count
+    return actual_new_count, actual_new_tokens
 
 
 async def _bump_conversation_count_tx(
     tx: AsyncManagedTransaction,
     conversation_id: str,
     actual_new_count: int,
+    actual_new_tokens: int,
     now: datetime,
 ) -> None:
     """
-    Increment Conversation.messageCount by the number of messages actually
-    created in this write. Called only when actual_new_count > 0.
-    This is always accurate: duplicate sends contribute 0.
+    Increment Conversation.messageCount and totalTokens by the counts of
+    messages and tokens actually created in this write.
+    Called only when actual_new_count > 0.
+    Both counters are accurate: duplicate sends contribute 0.
     """
     await tx.run(
         """
         MATCH (c:Conversation {conversationId: $conversationId})
-        SET c.messageCount = c.messageCount + $delta,
+        SET c.messageCount = c.messageCount + $deltaMessages,
+            c.totalTokens  = c.totalTokens  + $deltaTokens,
             c.updatedAt    = $now
         """,
         conversationId=conversation_id,
-        delta=actual_new_count,
+        deltaMessages=actual_new_count,
+        deltaTokens=actual_new_tokens,
         now=now,
     )

@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     embedding_dimensions: int = Field(default=1536)
 
     # ── Redis Cache (Phase 2) ────────────────────────────────────────────────
-    redis_url: str = Field(default="redis://localhost:6379")
+    redis_url: str = Field(default="")
     embedding_cache_ttl_seconds: int = Field(default=3600)
 
     @property

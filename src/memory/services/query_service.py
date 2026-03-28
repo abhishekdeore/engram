@@ -207,11 +207,20 @@ async def _date_prefilter_tx(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _candidate_filter_clause(candidate_ids: list[str]) -> str:
-    """Returns a Cypher WHERE fragment for the candidate filter."""
+    """Returns a Cypher WHERE fragment for the candidate conversation filter."""
     return (
         "AND node.conversationId IN $candidateIds"
         if candidate_ids else ""
     )
+
+
+def _provider_filter_clause(providers: list[str] | None, alias: str = "m") -> str:
+    """
+    Returns a Cypher WHERE fragment restricting results to specific providers.
+    alias is the variable name for the Message node in the calling query.
+    Returns empty string when providers is None (all providers accepted).
+    """
+    return f"AND {alias}.provider IN $providers" if providers else ""
 
 
 async def _search_segments_tx(
@@ -226,6 +235,7 @@ async def _search_segments_tx(
     so that all three search paths return the same message-level result shape.
     """
     candidate_clause = _candidate_filter_clause(candidate_ids)
+    provider_clause  = _provider_filter_clause(request.providers, alias="m")
     fetch_count = request.topK * _VECTOR_SEARCH_MULTIPLIER
 
     result = await tx.run(
@@ -236,6 +246,8 @@ async def _search_segments_tx(
           {candidate_clause}
         WITH node AS seg, score
         MATCH (seg)-[:CONTAINS_MESSAGE]->(m:Message)
+        WHERE true
+          {provider_clause}
         MATCH (c:Conversation {{conversationId: seg.conversationId}})
         RETURN m.messageId        AS messageId,
                m.role             AS role,
@@ -255,6 +267,7 @@ async def _search_segments_tx(
         queryEmbedding=query_embedding,
         userId=request.userId,
         candidateIds=candidate_ids,
+        providers=request.providers,
         topK=request.topK,
     )
     return await result.data()
@@ -268,6 +281,7 @@ async def _search_messages_tx(
 ) -> list[dict]:
     """Vector search on Message.embedding (short messages only — ≤512 tokens)."""
     candidate_clause = _candidate_filter_clause(candidate_ids)
+    provider_clause  = _provider_filter_clause(request.providers, alias="node")
     fetch_count = request.topK * _VECTOR_SEARCH_MULTIPLIER
 
     result = await tx.run(
@@ -276,6 +290,7 @@ async def _search_messages_tx(
         YIELD node, score
         WHERE node.userId = $userId
           {candidate_clause}
+          {provider_clause}
         WITH node AS m, score
         MATCH (c:Conversation {{conversationId: m.conversationId}})
         RETURN m.messageId        AS messageId,
@@ -296,6 +311,7 @@ async def _search_messages_tx(
         queryEmbedding=query_embedding,
         userId=request.userId,
         candidateIds=candidate_ids,
+        providers=request.providers,
         topK=request.topK,
     )
     return await result.data()
@@ -313,6 +329,7 @@ async def _search_chunks_tx(
     Chunks are index artifacts only — never exposed to the LLM client.
     """
     candidate_clause = _candidate_filter_clause(candidate_ids)
+    provider_clause  = _provider_filter_clause(request.providers, alias="m")
     fetch_count = request.topK * _VECTOR_SEARCH_MULTIPLIER
 
     result = await tx.run(
@@ -323,6 +340,8 @@ async def _search_chunks_tx(
           {candidate_clause}
         WITH node AS ch, score
         MATCH (m:Message {{messageId: ch.messageId}})
+        WHERE true
+          {provider_clause}
         MATCH (c:Conversation {{conversationId: m.conversationId}})
         RETURN m.messageId        AS messageId,
                m.role             AS role,
@@ -342,6 +361,7 @@ async def _search_chunks_tx(
         queryEmbedding=query_embedding,
         userId=request.userId,
         candidateIds=candidate_ids,
+        providers=request.providers,
         topK=request.topK,
     )
     return await result.data()
@@ -361,12 +381,14 @@ async def _fulltext_search_tx(
         "AND m.conversationId IN $candidateIds"
         if candidate_ids else ""
     )
+    provider_clause = _provider_filter_clause(request.providers, alias="m")
     result = await tx.run(
         f"""
         CALL db.index.fulltext.queryNodes('index_fulltext_message', $queryText)
         YIELD node AS m, score
         WHERE m.userId = $userId
           {candidate_clause}
+          {provider_clause}
         MATCH (c:Conversation {{conversationId: m.conversationId}})
         RETURN m.messageId        AS messageId,
                m.role             AS role,
@@ -385,6 +407,7 @@ async def _fulltext_search_tx(
         queryText=request.query,
         userId=request.userId,
         candidateIds=candidate_ids,
+        providers=request.providers,
         topK=request.topK,
     )
     return await result.data()
