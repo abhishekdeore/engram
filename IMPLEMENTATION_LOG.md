@@ -27,7 +27,8 @@ Establish the Neo4j graph schema, project scaffolding, and tooling before any ap
 - Both configured with pool size and connection timeout from settings
 
 #### Schema Setup (`scripts/setup_schema.py`)
-Applies 17 DDL statements to Neo4j, all using `IF NOT EXISTS` (fully idempotent):
+Applies 16 DDL statements to Neo4j, all using `IF NOT EXISTS` (fully idempotent).
+A pre-flight step drops `index_segment_conversation_order` if it exists in the database — that plain index covers the same columns as `constraint_segment_conversation_index`, and Neo4j will refuse to create the constraint while the plain index is present (see Bug P0-3 below).
 
 | # | Name | Type | Purpose |
 |---|------|------|---------|
@@ -36,18 +37,17 @@ Applies 17 DDL statements to Neo4j, all using `IF NOT EXISTS` (fully idempotent)
 | 3 | `constraint_message_id` | Unique constraint | `Message.messageId` |
 | 4 | `constraint_segment_id` | Unique constraint | `Segment.segmentId` |
 | 5 | `constraint_chunk_id` | Unique constraint | `Chunk.chunkId` |
-| 6 | `constraint_segment_conversation_index` | Composite unique constraint | `(Segment.conversationId, Segment.segmentIndex)` — prevents duplicate segments *(added during Phase 1 review)* |
+| 6 | `constraint_segment_conversation_index` | Composite unique constraint | `(Segment.conversationId, Segment.segmentIndex)` — prevents duplicate segments; its backing index also serves as the segment ordering index *(added during Phase 1 review)* |
 | 7 | `index_conversation_user_date` | Composite index | `(Conversation.userId, Conversation.startedAt)` — date pre-filter |
 | 8 | `index_message_user_timestamp` | Composite index | `(Message.userId, Message.timestamp)` |
-| 9 | `index_segment_conversation_order` | Composite index | `(Segment.conversationId, Segment.segmentIndex)` |
-| 10 | `index_message_conversation` | Index | `Message.conversationId` |
-| 11 | `index_segment_conversation` | Index | `Segment.conversationId` |
-| 12 | `index_chunk_message` | Index | `Chunk.messageId` |
-| 13 | `index_message_conversation_index` | Composite index | `(Message.conversationId, Message.messageIndex)` — segment range queries *(added during Phase 1 review)* |
-| 14 | `index_vector_segment` | Vector index | `Segment.embedding` (1536 dims, cosine) — Phase 2 |
-| 15 | `index_vector_message` | Vector index | `Message.embedding` (1536 dims, cosine) — Phase 2 |
-| 16 | `index_vector_chunk` | Vector index | `Chunk.embedding` (1536 dims, cosine) — Phase 2 |
-| 17 | `index_fulltext_message` | Full-text index | `Message.content` — keyword fallback search |
+| 9 | `index_message_conversation` | Index | `Message.conversationId` |
+| 10 | `index_segment_conversation` | Index | `Segment.conversationId` |
+| 11 | `index_chunk_message` | Index | `Chunk.messageId` |
+| 12 | `index_message_conversation_index` | Composite index | `(Message.conversationId, Message.messageIndex)` — segment range queries *(added during Phase 1 review)* |
+| 13 | `index_vector_segment` | Vector index | `Segment.embedding` (1536 dims, cosine) — Phase 2 |
+| 14 | `index_vector_message` | Vector index | `Message.embedding` (1536 dims, cosine) — Phase 2 |
+| 15 | `index_vector_chunk` | Vector index | `Chunk.embedding` (1536 dims, cosine) — Phase 2 |
+| 16 | `index_fulltext_message` | Full-text index | `Message.content` — keyword fallback search |
 
 #### Schema Verification (`scripts/verify_schema.py`)
 - Reads `SHOW CONSTRAINTS` and `SHOW INDEXES` from Neo4j
@@ -67,6 +67,14 @@ Applies 17 DDL statements to Neo4j, all using `IF NOT EXISTS` (fully idempotent)
 #### Bug P0-2 — `seed_sample_data.py` raised `TypeError` on full-text search
 - **Root cause**: `session.run(QUERY, query=query_text)` — the keyword argument name `query` collided with the neo4j driver's own `session.run(query=...)` parameter.
 - **Fix**: Renamed the Cypher parameter from `$query` to `$searchText` and the keyword argument accordingly.
+
+#### Bug P0-3 — `constraint_segment_conversation_index` could not be created while a regular index covered the same columns
+- **Root cause**: `index_segment_conversation_order` (a plain composite index on `Segment.conversationId, Segment.segmentIndex`) was applied to the database before `constraint_segment_conversation_index` (a composite uniqueness constraint on the same two properties) was added to the schema. Neo4j requires that no existing index covers the constraint columns — if one is present, constraint creation raises `Neo.ClientError.Schema.IndexAlreadyExists` and the statement is skipped. Because `setup_schema.py` uses `IF NOT EXISTS` (which suppresses `AlreadyExists` errors for constraints, not for this conflict), the constraint was silently absent from the database even though setup reported success.
+- **Impact**: Without the constraint, the MERGE-based duplicate-segment prevention (Bug P1-5 fix) provided no database-level safety guarantee. Concurrent writes to the same conversation could still create two Segment nodes at the same `segmentIndex`.
+- **Fix**:
+  1. Removed `index_segment_conversation_order` from `SCHEMA_STATEMENTS` entirely. The constraint's own backing index covers `(conversationId, segmentIndex)` and provides equivalent query performance — the separate index is redundant.
+  2. Added a pre-flight `DROP INDEX index_segment_conversation_order IF EXISTS` step at the top of `main()` in `setup_schema.py`. This handles existing databases that already have the plain index without manual intervention.
+  3. Removed `index_segment_conversation_order` from the expected set in `test_connection.py::test_neo4j_composite_indexes_exist` (the constraint's backing index has the constraint name, not the old index name).
 
 ---
 
@@ -394,11 +402,14 @@ Conducted after Phases 0, 1, and 2 were complete. The goal was to verify the thr
 
 ---
 
-### Bug P3-PRE-6 — `constraint_segment_conversation_index` not verified in tests
+### Bug P3-PRE-6 — `constraint_segment_conversation_index` not verified in tests, and blocked by a conflicting plain index in the live database
 
-- **Root cause**: `test_connection.py::test_neo4j_constraints_exist` checks five uniqueness constraints but omits `constraint_segment_conversation_index`, which was added in Phase 1 to fix Bug P1-5 (duplicate Segment nodes). If this constraint is absent from the database, the MERGE-based duplicate prevention silently reverts to unsafe behavior. Also missing: `index_message_conversation_index` in the composite index test.
-- **Impact**: A misconfigured environment (e.g., after a database wipe and re-setup) gives no test failure but has a live concurrency bug.
-- **Fix**: Add both names to the respective `expected` sets in `test_connection.py`.
+- **Root cause (test gap)**: `test_connection.py::test_neo4j_constraints_exist` checked five uniqueness constraints but omitted `constraint_segment_conversation_index`, which was added in Phase 1 to fix Bug P1-5. Also missing: `index_message_conversation_index` in the composite index test.
+- **Root cause (DB conflict)**: A plain composite index `index_segment_conversation_order` was created on `(Segment.conversationId, Segment.segmentIndex)` in a prior schema run. Neo4j refuses to create a uniqueness constraint on the same columns while that index exists. `setup_schema.py` silently skipped the constraint creation (the error was logged but the exit code was 0), leaving the database without the constraint. Full details in Bug P0-3 above.
+- **Impact**: Without the constraint, the MERGE-based duplicate-segment prevention had no database-level enforcement. Tests gave a false green on a misconfigured DB.
+- **Fix**:
+  1. Added `constraint_segment_conversation_index` to `test_neo4j_constraints_exist` and `index_message_conversation_index` to `test_neo4j_composite_indexes_exist`.
+  2. Removed the redundant `index_segment_conversation_order` from `SCHEMA_STATEMENTS` and added a pre-flight DROP in `setup_schema.py` (see Bug P0-3 for full details).
 
 ---
 
