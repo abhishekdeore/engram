@@ -96,8 +96,8 @@ Conversations are segmented into 20-message blocks (`Segment` nodes) — the uni
 
 - [x] Phase 0 — Neo4j schema, constraints, indexes
 - [x] Phase 1 — Write API, segmentation, JWT auth
-- [ ] Phase 2 — Embedding pipeline, semantic search, read API
-- [ ] Phase 3 — Browser extension / LLM plugin integrations
+- [x] Phase 2 — Embedding pipeline, semantic search, query API
+- [x] Phase 3 — Read/delete API, provider adapters (ChatGPT · Claude · Gemini · Grok · Copilot), per-user rate limiting, correlation ID observability
 
 ---
 
