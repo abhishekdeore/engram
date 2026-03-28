@@ -112,14 +112,6 @@ SCHEMA_STATEMENTS = [
         """,
     ),
     (
-        "index_segment_conversation_order",
-        "Composite index: Segment (conversationId, segmentIndex) — segment ordering",
-        """
-        CREATE INDEX index_segment_conversation_order IF NOT EXISTS
-        FOR (s:Segment) ON (s.conversationId, s.segmentIndex)
-        """,
-    ),
-    (
         "index_message_conversation",
         "Index: Message.conversationId — fast conversation→messages lookup",
         """
@@ -260,8 +252,23 @@ def main() -> int:
         )
         return 1
 
-    # ── Step 2: Run all DDL ───────────────────────────────────────────────────
+    # ── Step 2: Pre-flight cleanup ────────────────────────────────────────────
+    # index_segment_conversation_order covered (conversationId, segmentIndex).
+    # The uniqueness constraint constraint_segment_conversation_index covers the
+    # same columns and creates its own backing index.  Neo4j won't create the
+    # constraint while the plain index exists, so drop it first if present.
     driver = get_driver()
+    try:
+        with driver.session(database=settings.neo4j_database) as session:
+            session.run("DROP INDEX index_segment_conversation_order IF EXISTS")
+        console.print(
+            "[dim]Pre-flight: dropped index_segment_conversation_order "
+            "(superseded by constraint)[/dim]"
+        )
+    except Exception as exc:
+        console.print(f"[yellow]Pre-flight cleanup warning: {exc}[/yellow]")
+
+    # ── Step 3: Run all DDL ───────────────────────────────────────────────────
     results = []
 
     console.print(f"\n[bold]Applying {len(SCHEMA_STATEMENTS)} schema statements...[/bold]\n")

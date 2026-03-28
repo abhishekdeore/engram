@@ -1,10 +1,18 @@
-from neo4j import GraphDatabase, Driver, AsyncGraphDatabase, AsyncDriver
-from neo4j.exceptions import ServiceUnavailable, AuthError
+"""
+Neo4j sync driver — used by scripts and tests only.
+
+The async driver used by FastAPI is created in the lifespan function in
+api/main.py and stored in app.state.neo4j_driver.  It is never instantiated
+here — the old async singleton functions have been removed (P3-PRE-10).
+"""
+
+from neo4j import GraphDatabase, Driver
+from neo4j.exceptions import ServiceUnavailable, AuthError  # noqa: F401 — re-exported for callers
 
 from ..config import settings
 
 
-# ── Sync driver (used by scripts and setup tasks) ────────────────────────────
+# ── Sync driver (scripts, tests, setup tasks) ────────────────────────────────
 
 _sync_driver: Driver | None = None
 
@@ -35,34 +43,4 @@ def verify_connectivity() -> bool:
     """
     driver = get_driver()
     driver.verify_connectivity()
-    return True
-
-
-# ── Async driver (used by FastAPI in Phase 1) ────────────────────────────────
-
-_async_driver: AsyncDriver | None = None
-
-
-def get_async_driver() -> AsyncDriver:
-    global _async_driver
-    if _async_driver is None:
-        _async_driver = AsyncGraphDatabase.driver(
-            settings.neo4j_uri,
-            auth=(settings.neo4j_username, settings.neo4j_password),
-            max_connection_pool_size=settings.neo4j_max_connection_pool_size,
-            connection_timeout=settings.neo4j_connection_timeout_seconds,
-        )
-    return _async_driver
-
-
-async def close_async_driver() -> None:
-    global _async_driver
-    if _async_driver is not None:
-        await _async_driver.close()
-        _async_driver = None
-
-
-async def verify_async_connectivity() -> bool:
-    driver = get_async_driver()
-    await driver.verify_connectivity()
     return True

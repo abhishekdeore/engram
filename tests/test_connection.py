@@ -46,6 +46,7 @@ def test_neo4j_constraints_exist():
         "constraint_message_id",
         "constraint_segment_id",
         "constraint_chunk_id",
+        "constraint_segment_conversation_index",
     }
     driver = get_driver()
     with driver.session(database=settings.neo4j_database) as session:
@@ -84,10 +85,10 @@ def test_neo4j_composite_indexes_exist():
     expected = {
         "index_conversation_user_date",
         "index_message_user_timestamp",
-        "index_segment_conversation_order",
         "index_message_conversation",
         "index_segment_conversation",
         "index_chunk_message",
+        "index_message_conversation_index",
     }
     driver = get_driver()
     with driver.session(database=settings.neo4j_database) as session:

@@ -34,13 +34,13 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-EMBEDDING_MODEL   = "text-embedding-3-small"
-EMBEDDING_DIMS    = 1536
+EMBEDDING_MODEL   = settings.embedding_model
+EMBEDDING_DIMS    = settings.embedding_dimensions
 MAX_EMBED_TOKENS  = 8191      # hard limit of text-embedding-3-small
 CHUNK_THRESHOLD   = 512       # messages above this token count get chunked
 CHUNK_SIZE        = 512       # tokens per chunk
 CHUNK_OVERLAP     = 100       # overlapping tokens between consecutive chunks
-REDIS_TTL         = 3600      # embedding cache TTL (seconds)
+REDIS_TTL         = settings.embedding_cache_ttl_seconds
 REDIS_KEY_PREFIX  = "engram:embed:"
 
 # tiktoken encoding used by text-embedding-3-small
@@ -239,6 +239,7 @@ async def _get_unembedded_messages_tx(
         """
         MATCH (c:Conversation {conversationId: $convId})-[:HAS_MESSAGE]->(m:Message)
         WHERE m.embedding IS NULL
+          AND NOT EXISTS { MATCH (m)-[:HAS_CHUNK]->(:Chunk) }
         OPTIONAL MATCH (seg:Segment)-[:CONTAINS_MESSAGE]->(m)
         RETURN m.messageId      AS messageId,
                m.content        AS content,
