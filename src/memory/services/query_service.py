@@ -206,10 +206,15 @@ async def _date_prefilter_tx(
 # Step 3: Vector searches
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _candidate_filter_clause(candidate_ids: list[str]) -> str:
-    """Returns a Cypher WHERE fragment for the candidate conversation filter."""
+def _candidate_filter_clause(candidate_ids: list[str], alias: str = "node") -> str:
+    """
+    Returns a Cypher WHERE fragment restricting results to candidate conversations.
+    alias is the variable name for the node that carries a conversationId property.
+    Defaults to 'node' because all three vector searches use YIELD node, score.
+    Returns empty string when candidate_ids is empty (no date filter — all conversations).
+    """
     return (
-        "AND node.conversationId IN $candidateIds"
+        f"AND {alias}.conversationId IN $candidateIds"
         if candidate_ids else ""
     )
 

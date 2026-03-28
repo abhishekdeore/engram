@@ -1,20 +1,24 @@
 """
-Query route — Phase 2
-======================
+Query route — Phase 2 / Phase 3
+================================
 POST /memory/query  — semantic memory retrieval
 """
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
+from ...config import settings
 from ...models.requests import QueryRequest, QueryResponse
 from ...services.query_service import query_memory
 from ..dependencies import CurrentUserId, Neo4jDriver, OpenAIClient, RedisClient
+from ..limiter import limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+
+_QUERY_RATE = f"{settings.rate_limit_query_per_minute}/minute"
 
 
 @router.post(
@@ -29,22 +33,18 @@ router = APIRouter(prefix="/memory", tags=["memory"])
         "The userId in the request body must match the userId in the Bearer token."
     ),
 )
+@limiter.limit(_QUERY_RATE)
 async def query_memory_route(
+    request: Request,
     body: QueryRequest,
     current_user_id: CurrentUserId,
     driver: Neo4jDriver,
     openai_client: OpenAIClient,
     redis_client: RedisClient,
 ) -> QueryResponse:
-    """
-    Phase 2 query endpoint.
+    # Store userId in request.state so the rate-limit key function can use it
+    request.state.authenticated_user_id = current_user_id
 
-    Flow:
-      1. JWT validated by CurrentUserId dependency
-      2. userId in token must match userId in request body
-      3. Run full retrieval pipeline synchronously (caller waits for results)
-      4. Return ranked, verbatim conversation turns within token budget
-    """
     if body.userId != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

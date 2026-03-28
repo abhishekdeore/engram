@@ -355,10 +355,10 @@ Conducted after Phases 0, 1, and 2 were complete. The goal was to verify the thr
 | P3-PRE-5 | **P1 — Fix before Phase 3** | ✅ Fixed | Redis URL defaults to non-empty string; always attempts connection |
 | P3-PRE-6 | **P1 — Fix before Phase 3** | ✅ Fixed | `constraint_segment_conversation_index` missing from `test_connection.py` |
 | P3-PRE-7 | **P1 — Fix before Phase 3** | ✅ Fixed | No end-to-end write→embed→query integration test |
-| P3-PRE-8 | **P2 — Fix during Phase 3** | ⬜ Pending | Version drift: `__init__.py` reports `0.1.0`, `main.py` declares `0.2.0` |
-| P3-PRE-9 | **P2 — Fix during Phase 3** | ⬜ Pending | JWT secret key has no production-safety validator in `Settings` |
-| P3-PRE-10 | **P3 — Technical debt** | ⬜ Pending | Dead async driver singleton in `db/connection.py` never used by FastAPI |
-| P3-PRE-11 | **P3 — Technical debt** | ⬜ Pending | `_candidate_filter_clause` hardcodes alias `node`; breaks on future search paths |
+| P3-PRE-8 | **P2 — Fix during Phase 3** | ✅ Fixed | Version drift: `__init__.py` reports `0.1.0`, `main.py` declares `0.2.0` |
+| P3-PRE-9 | **P2 — Fix during Phase 3** | ✅ Fixed | JWT secret key has no production-safety validator in `Settings` |
+| P3-PRE-10 | **P3 — Technical debt** | ✅ Fixed | Dead async driver singleton in `db/connection.py` never used by FastAPI |
+| P3-PRE-11 | **P3 — Technical debt** | ✅ Fixed | `_candidate_filter_clause` hardcodes alias `node`; breaks on future search paths |
 
 ---
 
@@ -418,6 +418,190 @@ Conducted after Phases 0, 1, and 2 were complete. The goal was to verify the thr
 - **Root cause**: All Phase 2 tests seed Neo4j directly, bypassing the write pipeline entirely. There is no test that exercises the full cross-phase flow: `POST /memory/write` → BackgroundTask fires → embeddings land in Neo4j → `POST /memory/query` returns the written conversation.
 - **Impact**: If `write_service.py` and `embedding_service.py` become misaligned (e.g., `userId` propagation, `tokenCount` conventions, `segmentId` naming), no test catches it.
 - **Fix**: Add `TestEndToEnd` class in a new `tests/test_end_to_end.py` file. Write a conversation via the FastAPI TestClient (BackgroundTasks run synchronously), mock OpenAI to return a fixed embedding, then query with the same embedding and verify verbatim content is returned.
+
+---
+
+## Phase 3 — Read API, Delete API, Provider Adapters, Rate Limiting & Observability
+
+### Goal
+Complete the server-side API surface to make the service usable by browser extensions and LLM plugins: expose read/list/delete endpoints, implement cross-provider conversation normalizers, add per-user rate limiting, and add observability (correlation IDs, production safety validators).
+
+### What Was Implemented
+
+#### Pre-Phase 3 debt fixed before new features
+
+**P3-PRE-8 — Version drift resolved**
+Bumped `src/memory/__init__.py` from `0.1.0` → `0.3.0` and `main.py` app version + root endpoint from `0.2.0` → `0.3.0`. All three now agree.
+
+**P3-PRE-9 — Production JWT safety validator**
+Added `_INSECURE_JWT_DEFAULTS` set and `@model_validator(mode="after")` `_validate_production_safety` in `Settings`. When `app_env == "production"`, startup raises `ValueError` if `jwt_secret_key` is in the known-weak set or shorter than 32 characters. Fail-fast is the only safe default: a misconfigured secret makes every token forgeable with no observable error.
+
+**P3-PRE-10 — Dead async driver singleton removed**
+`db/connection.py` contained `get_async_driver`, `close_async_driver`, `verify_async_connectivity`, and the `_async_driver` global. FastAPI has always used `app.state.neo4j_driver` set in the lifespan context manager. The singleton was never called, never tested, and could not work with the async lifespan anyway. Removed entirely. Module docstring added to explain the driver ownership model.
+
+**P3-PRE-11 — `_candidate_filter_clause` alias parameter**
+The function hardcoded the alias `node`. Added `alias: str = "node"` parameter so it is consistent with `_provider_filter_clause` and safe to use on future search paths that bind the node under a different name.
+
+---
+
+#### Rate Limiting (`src/memory/api/limiter.py` — new file)
+
+Extracted `Limiter` and `_rate_limit_key` into a standalone module to break the circular import between `main.py` (which imports route modules) and route modules (which need the limiter).
+
+Key function strategy (three tiers):
+1. `request.state.authenticated_user_id` if already set (post-auth path) — most precise
+2. Decode Bearer JWT from `Authorization` header without verifying — so the rate bucket is per-user even before the FastAPI dependency runs; prevents all test traffic from sharing one IP bucket
+3. Fall back to `get_remote_address` for unauthenticated endpoints (`/health`, etc.)
+
+Rate limits are configured via `settings.rate_limit_write_per_minute` and `settings.rate_limit_query_per_minute`. Defaults are 600/600 — intentionally permissive for development and testing. Operators lower them via `.env` in production. Note: slowapi uses in-process counters; with `--workers > 1` each worker has an independent counter, so the effective limit becomes `limit × workers`. Use `workers=1` for exact limiting, or switch to a Redis-backed limiter.
+
+---
+
+#### Read Service (`src/memory/services/read_service.py` — new file)
+
+- `list_conversations(driver, user_id, provider, limit, offset, date_from, date_to)` — two Cypher queries in the same session: one `COUNT(*)` for pagination total, one paginated row query ordered by `startedAt DESC`. Supports optional provider filter and ISO date range. Returns `ListConversationsResponse`.
+- `get_conversation(driver, conversation_id, user_id)` — MATCH includes `userId` predicate so cross-user access returns None (404) identically to not-found. Messages ordered by `messageIndex ASC` for chronological output.
+
+---
+
+#### Delete Service (`src/memory/services/delete_service.py` — new file)
+
+- `delete_conversation(driver, conversation_id, user_id)` — verifies ownership with a MATCH that includes userId; if not found, returns None (no information leak). Deletion order: Chunks → Messages → Segments → Conversation (avoids Neo4j orphan-node constraint issues). All deletes use DETACH DELETE.
+- `delete_user_data(driver, user_id)` — GDPR erasure in 5 steps matching the same cascade order; counts nodes deleted per step; deletes the User node last. Returns total `nodesDeleted` count.
+
+---
+
+#### Read/Delete Routes (`src/memory/api/routes/memory.py` — extended)
+
+Added four endpoints to the existing `memory.py` router:
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/memory/conversations` | JWT | Paginated list; supports `provider`, `dateFrom`, `dateTo`, `limit`, `offset` query params. Rejects `dateTo` without `dateFrom` (422). |
+| `GET` | `/memory/conversation/{conversationId}` | JWT | Full verbatim conversation; 404 for not-found or cross-user. |
+| `DELETE` | `/memory/conversation/{conversationId}` | JWT | Delete conversation + cascade; 404 for not-found or cross-user; 200 with `DeleteResponse`. |
+| `DELETE` | `/memory/user/{userId}` | JWT | GDPR purge; 403 if path userId ≠ token userId. |
+
+Write endpoint (`POST /memory/write`) updated: added `@limiter.limit(_WRITE_RATE)` decorator and `request: Request` parameter so the rate-limit key function can access `request.state`.
+
+---
+
+#### Query Route (`src/memory/api/routes/query.py` — updated)
+
+Added `@limiter.limit(_QUERY_RATE)` decorator and `request: Request` parameter. Sets `request.state.authenticated_user_id = current_user_id` so the rate-limit key function uses the correct per-user bucket.
+
+---
+
+#### Provider Adapters (`src/memory/adapters/` — new package)
+
+Five concrete adapter classes and a dispatch normalizer that convert each provider's native export format to Canonical Message Format (CMF).
+
+All adapters:
+- Are pure functions with no I/O.
+- Use `SHA-256(conversationId:role:index)` for deterministic, idempotent `messageId` generation.
+- Filter out system/tool/function roles — only `user` and `assistant` pass through.
+- Filter empty content (post-process defense-in-depth in `normalizer.py`).
+
+| Adapter | Input formats | Notes |
+|---------|--------------|-------|
+| `chatgpt.py` | Chat Completions API response, `conversations.json` mapping format | `_extract_text` handles both plain string and `{"content_type": "text", "parts": [...]}` dicts |
+| `claude.py` | `type="message"` API response, `history[]` array format | Content block arrays joined with newline |
+| `gemini.py` | `candidates[]` (generateContent), `contents[]` history | `"model"` role mapped → `"assistant"` |
+| `grok.py` | OpenAI-compatible format | `grok-` prefixed IDs; maps `completion_tokens` to last assistant turn |
+| `copilot.py` | VS Code `requests[]` format (timestamp in ms), generic `turns[]` format | `copilot-` prefixed IDs |
+
+`normalizer.py` — `normalize(raw, provider)` dispatch; raises `AdapterError` for unknown provider; `supported_providers()` returns sorted list of valid provider strings.
+
+---
+
+#### Observability — Correlation ID Middleware
+
+Added to `main.py`:
+- Honours `X-Request-ID` from client if provided; generates UUID4 otherwise.
+- Sanitizes: printable ASCII only, max 64 characters (prevents log injection).
+- Attaches `request_id` to `request.state` and echoes it back in `X-Request-ID` response header.
+
+---
+
+#### New Response Models (`src/memory/models/requests.py`)
+
+- `ConversationSummary` — fields: `conversationId`, `provider`, `model`, `messageCount`, `totalTokens`, `segmentCount`, `startedAt`, `endedAt`, `isComplete`
+- `ListConversationsResponse` — `conversations: list[ConversationSummary]`, `total`, `limit`, `offset`
+- `ConversationReadResponse` — full conversation with all messages in CMF
+- `DeleteResponse` — `status`, `message`, `deletedId`, `nodesDeleted`
+
+`ProviderType` Literal extended to include `"copilot"`.
+
+---
+
+#### Dependencies (`pyproject.toml`)
+
+Added `"slowapi>=0.1.9"`.
+
+---
+
+### Phase 3 Bugs Encountered & Fixed
+
+#### Bug P3-1 — Circular import between `main.py` and route modules
+
+- **Root cause**: `query.py` and `memory.py` originally imported `limiter` from `main.py`. `main.py` imports from `routes/`. Python's import system raises `ImportError` on the circular reference at startup.
+- **Fix**: Extracted `limiter` and `_rate_limit_key` to `src/memory/api/limiter.py`. Both `main.py` and route files import from the new standalone module. No circular reference.
+
+#### Bug P3-2 — Rate limiter exhausted test suite bucket
+
+- **Root cause 1**: Default rate limit was 30/minute. `test_write_api.py` makes ~50–80 write requests per run, all as the same `TEST_USER_ID`.
+- **Root cause 2**: `request.state.authenticated_user_id` is not set until the route body runs — after the `@limiter.limit` decorator has already determined the rate key. Without user ID in state, the fallback was `get_remote_address(request)` = `"testclient"`, collapsing all test users into one shared bucket.
+- **Fix 1**: Updated `_rate_limit_key` to decode the JWT from the `Authorization` header when `authenticated_user_id` is not yet in state. Each user now has their own bucket from the first request.
+- **Fix 2**: Changed default limits from 30/60 to 600/600 per minute. Intentionally permissive for dev/test; operators tighten via `.env`.
+
+#### Bug P3-3 — `HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning
+
+- **Root cause**: FastAPI/Starlette renamed or deprecated the `status.HTTP_422_UNPROCESSABLE_ENTITY` constant export path. Using it emitted a deprecation warning.
+- **Fix**: Replaced with the literal integer `422` in the `dateTo`-without-`dateFrom` guard in `memory.py`.
+
+---
+
+### Phase 3 — Test Coverage Summary
+
+**`tests/test_read_api.py`** (22 tests)
+
+| Class | Tests | What Is Covered |
+|-------|-------|----------------|
+| `TestListConversations` | 13 | Auth (401), response shape, seeded conversation appears, total count, provider filter (match + exclude), pagination limit, pagination offset, cross-user data isolation, `dateTo` without `dateFrom` (422), date range excludes out-of-range conversation, all `ConversationSummary` fields present |
+| `TestReadConversation` | 9 | Auth (401), 200 for own conversation, 404 for nonexistent, 404 for another user's conversation, verbatim content preserved, chronological order, response shape, message shape, `messageCount` == len(`messages`) |
+
+**`tests/test_delete_api.py`** (14 tests)
+
+| Class | Tests | What Is Covered |
+|-------|-------|----------------|
+| `TestDeleteConversation` | 8 | Auth (401), 200 success, response shape, conversation node gone from Neo4j, messages cascade deleted, 404 for nonexistent, cross-user protection (other user's conversation unchanged), idempotent second call 404 |
+| `TestDeleteUser` | 6 | Auth (401), userId mismatch 403, 200 success, User + Conversation nodes purged, response shape, `nodesDeleted ≥ 3` |
+
+**`tests/test_adapters.py`** (31 tests)
+
+| Class | Tests | What Is Covered |
+|-------|-------|----------------|
+| `TestNormalizerDispatch` | 6 | All 5 providers recognised, `AdapterError` for unknown provider, `ValueError` for non-dict, empty dict → empty list, empty content filtered, system roles filtered |
+| `TestChatGPTAdapter` | 5 | Completions format, conversations.json mapping format, deterministic messageId, token extraction, non-user/assistant roles excluded |
+| `TestClaudeAdapter` | 5 | API response format, history array format, content block arrays joined, deterministic messageId, role preservation |
+| `TestGeminiAdapter` | 4 | generateContent candidates format, contents history format, `"model"` → `"assistant"` mapping, deterministic messageId |
+| `TestGrokAdapter` | 4 | OpenAI-compatible input, `grok-` prefix, token extraction, empty turns skipped |
+| `TestCopilotAdapter` | 4 | VS Code requests format (ms timestamps), turns format, `copilot-` prefix, deterministic messageId |
+| `TestCrossProviderConsistency` | 3 | All 5 providers produce valid CMF (parametrized); role values are `"user"`/`"assistant"` only; messageIds are unique within each result |
+
+**Overall Phase 3 totals: 67 new tests; full suite 157 passed, 1 skipped (Redis — not in CI)**
+
+---
+
+### Phase 3 Residual Risks
+
+| Risk | Severity | Notes |
+|------|----------|-------|
+| slowapi in-process counters | Medium | With `--workers > 1` effective limit = `limit × workers`. Use Redis-backed limiter for exact enforcement in production multi-worker deployments. |
+| Provider adapter format assumptions | Low–Medium | Adapters are written against documented format snapshots. Providers change their export format without notice. Monitor and update when providers ship breaking changes. |
+| Streaming responses not yet adapted | Low | All adapters assume complete conversations. Streaming SSE deltas from any provider are not handled. |
+| Correlation ID trust boundary | Low | `X-Request-ID` is accepted from the client and echoed back. It is sanitized (printable ASCII, max 64 chars) but not validated for format. A caller could inject an arbitrary correlation ID into logs. Add format validation (UUID only) if log integrity matters. |
+| GDPR erasure is synchronous | Low | `DELETE /memory/user/{userId}` runs a multi-step cascade synchronously in the request. For users with millions of nodes this could cause a timeout. Convert to background task with a status endpoint if needed. |
 
 ---
 

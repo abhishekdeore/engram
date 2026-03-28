@@ -33,6 +33,9 @@ dependencies = [
 
     # CLI output for scripts
     "rich>=13.7.0",
+
+    # Rate limiting (Phase 3+)
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

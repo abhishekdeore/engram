@@ -8,7 +8,7 @@ from .message import MessageIn
 
 # ── Providers supported ───────────────────────────────────────────────────────
 
-ProviderType = Literal["chatgpt", "claude", "gemini", "custom"]
+ProviderType = Literal["chatgpt", "claude", "gemini", "grok", "copilot", "custom"]
 
 
 # ── Write ─────────────────────────────────────────────────────────────────────
@@ -205,6 +205,53 @@ class QueryResponse(BaseModel):
     queryLatencyMs: float
     dateFilterApplied: bool
     searchMode: Literal["vector", "fulltext", "empty"]
+
+
+# ── Phase 3: Read / List / Delete models ─────────────────────────────────────
+
+class ConversationSummary(BaseModel):
+    """One row in the conversation list response."""
+    conversationId: str
+    provider: str
+    model: str
+    messageCount: int
+    totalTokens: int
+    segmentCount: int
+    startedAt: str      # ISO-8601
+    endedAt: str        # ISO-8601
+    isComplete: bool
+
+
+class ListConversationsResponse(BaseModel):
+    """Paginated list of a user's stored conversations."""
+    conversations: list[ConversationSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class ConversationReadResponse(BaseModel):
+    """
+    Full verbatim conversation — all messages in chronological order.
+    Returned by GET /memory/conversation/{conversationId}.
+    """
+    conversationId: str
+    userId: str
+    provider: str
+    model: str
+    messageCount: int
+    totalTokens: int
+    startedAt: str
+    endedAt: str
+    messages: list[MessageResult]
+
+
+class DeleteResponse(BaseModel):
+    """Confirmation returned by all DELETE endpoints."""
+    status: str = "deleted"
+    message: str
+    deletedId: str          # conversationId or userId, depending on endpoint
+    nodesDeleted: int       # total Neo4j nodes removed
 
 
 # ── Auth (development token generation) ──────────────────────────────────────

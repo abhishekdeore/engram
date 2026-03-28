@@ -6,17 +6,25 @@ Start with:
 
 Or for production:
     uv run uvicorn memory.api.main:app --host 0.0.0.0 --port 8000 --workers 1
+
+NOTE: slowapi uses an in-memory counter store.  With --workers > 1 each worker
+has an independent counter so the per-minute limit becomes limit × workers.
+Keep workers=1 for exact rate limiting, or switch to a Redis-backed limiter.
 """
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import AsyncGraphDatabase
 from openai import AsyncOpenAI
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from ..config import settings
+from .limiter import limiter
 from .routes import health, auth, memory, query
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -35,18 +43,9 @@ async def lifespan(app: FastAPI):
     """
     Initialises and tears down all shared clients.
 
-    Neo4j (required):
-      Fails fast on startup if unreachable.
-
-    OpenAI (optional):
-      Created only when OPENAI_API_KEY is set.
-      If absent, the embedding pipeline is a no-op and full-text search
-      is used as the sole retrieval path.
-
-    Redis (optional):
-      Created only when REDIS_URL is set.  Connection errors during startup
-      are logged and silenced — Redis is an embedding cache, not a hard
-      dependency.  If unavailable, embeddings are computed fresh on every call.
+    Neo4j (required): Fails fast on startup if unreachable.
+    OpenAI (optional): Created only when OPENAI_API_KEY is set.
+    Redis (optional): Created only when REDIS_URL is set.
     """
     # ── Neo4j ─────────────────────────────────────────────────────────────────
     logger.info("startup: connecting to Neo4j at %s", settings.neo4j_uri)
@@ -107,8 +106,6 @@ async def lifespan(app: FastAPI):
     await driver.close()
     if redis_client is not None:
         await redis_client.aclose()
-    # AsyncOpenAI has no explicit close method; the underlying httpx client
-    # is cleaned up automatically.
     logger.info("shutdown: complete")
 
 
@@ -122,11 +119,35 @@ app = FastAPI(
         "semantic vector search. Zero hallucination — the memory pipeline "
         "never calls a generative model."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Attach limiter to app state (required by slowapi)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ── Correlation ID middleware ──────────────────────────────────────────────────
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    """
+    Attach a correlation ID to every request.
+    Honours X-Request-ID from the client if provided; generates a UUID otherwise.
+    Echoes the ID back in the X-Request-ID response header so clients can
+    correlate logs with responses.
+    """
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    # Sanitise: only allow printable ASCII, max 64 chars
+    request_id = "".join(c for c in request_id if c.isprintable() and c != "\n")[:64]
+
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -154,7 +175,7 @@ app.include_router(query.router)
 async def root():
     return {
         "service": "engram",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "docs": "/docs",
         "health": "/health",
     }
