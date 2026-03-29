@@ -4,39 +4,37 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cross-llm-memory"
-version = "0.1.0"
+version = "0.4.0"
 description = "Cross-LLM unified memory system — verbatim conversation storage and retrieval on Neo4j"
 requires-python = ">=3.11"
 dependencies = [
     # Database
     "neo4j>=5.19.0",
-
     # Config & validation
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "python-dotenv>=1.0.0",
-
     # API server (Phase 1+)
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
-
     # Embeddings (Phase 2+)
     "openai>=1.35.0",
     "tiktoken>=0.7.0",
-
     # Cache (Phase 2+)
     "redis>=5.0.0",
-
     # Auth (Phase 1+)
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
-
     # CLI output for scripts
     "rich>=13.7.0",
-
     # Rate limiting (Phase 3+)
     "slowapi>=0.1.9",
+    # MCP server (Phase 4+)
+    "mcp>=1.0.0",
 ]
+
+[project.scripts]
+engram-mcp = "memory.mcp_server:run"
 
 [project.optional-dependencies]
 dev = [
