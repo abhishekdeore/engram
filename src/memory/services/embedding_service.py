@@ -22,6 +22,7 @@ Design rules:
 import hashlib
 import logging
 import json
+import uuid
 from typing import Optional
 
 import tiktoken
@@ -283,8 +284,7 @@ async def _create_chunk_tx(
     MERGE a Chunk node (idempotent on messageId+chunkIndex),
     set its embedding, and link to the parent Message.
     """
-    import uuid as _uuid
-    chunk_id = str(_uuid.uuid4())
+    chunk_id = str(uuid.uuid4())
     await tx.run(
         """
         MERGE (ch:Chunk {messageId: $messageId, chunkIndex: $chunkIndex})
