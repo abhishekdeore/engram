@@ -29,10 +29,13 @@ The memory pipeline **never calls a generative model**. What goes in comes out u
 | Layer | Technology |
 |-------|-----------|
 | API | FastAPI + Uvicorn |
-| Graph DB | Neo4j 5.x / 2026.x |
+| Graph DB | Neo4j 2026.x |
 | Auth | JWT (HS256) |
-| Embeddings | OpenAI `text-embedding-3-small` *(Phase 2)* |
-| Semantic search | Neo4j vector index, cosine similarity *(Phase 2)* |
+| Embeddings | OpenAI `text-embedding-3-small` |
+| Semantic search | Neo4j vector index, cosine similarity |
+| Rate limiting | slowapi (per-user, JWT-decoded key) |
+| Cache | Redis (optional — embedding cache) |
+| MCP | `mcp==1.26.0`, stdio transport (Claude Desktop) |
 | Runtime | Python 3.11, uv |
 
 ---
@@ -98,6 +101,7 @@ Conversations are segmented into 20-message blocks (`Segment` nodes) — the uni
 - [x] Phase 1 — Write API, segmentation, JWT auth
 - [x] Phase 2 — Embedding pipeline, semantic search, query API
 - [x] Phase 3 — Read/delete API, provider adapters (ChatGPT · Claude · Gemini · Grok · Copilot), per-user rate limiting, correlation ID observability
+- [x] Phase 4 — MCP server (Claude Desktop integration), write retry with exponential backoff
 
 ---
 
