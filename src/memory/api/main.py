@@ -119,7 +119,7 @@ app = FastAPI(
         "semantic vector search. Zero hallucination — the memory pipeline "
         "never calls a generative model."
     ),
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -175,7 +175,7 @@ app.include_router(query.router)
 async def root():
     return {
         "service": "engram",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "docs": "/docs",
         "health": "/health",
     }

@@ -167,12 +167,12 @@ async def _delete_conversation_tx(
         userId=user_id,
     )
     summary = await del_result.consume()
-    # The summary counts only nodes deleted in the last statement; we sum
-    # a conservative estimate — 1 (conversation) as the minimum.
-    # The full count is approximated; exact tracking would require counting
-    # before deletion, which adds a round-trip. The route does not surface
-    # this number as a guarantee, only as informational metadata.
-    nodes_deleted = summary.counters.nodes_deleted + 1  # +1 for Conversation itself
+    # summary.counters.nodes_deleted already includes the Conversation node.
+    # The prior three statements (Chunks, Messages, Segments) are not counted
+    # here — their summaries were not captured. The total is therefore a lower
+    # bound, but it is never inflated. The route surfaces this as informational
+    # metadata only, not as a guarantee.
+    nodes_deleted = summary.counters.nodes_deleted
 
     return (nodes_deleted,)
 
