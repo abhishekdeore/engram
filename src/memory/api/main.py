@@ -25,7 +25,7 @@ from slowapi.errors import RateLimitExceeded
 
 from ..config import settings
 from .limiter import limiter
-from .routes import health, auth, memory, query
+from .routes import health, auth, memory, query, chatgpt
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +167,7 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(memory.router)
 app.include_router(query.router)
+app.include_router(chatgpt.router)
 
 
 # ── Root ──────────────────────────────────────────────────────────────────────

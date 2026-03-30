@@ -102,6 +102,7 @@ Conversations are segmented into 20-message blocks (`Segment` nodes) — the uni
 - [x] Phase 2 — Embedding pipeline, semantic search, query API
 - [x] Phase 3 — Read/delete API, provider adapters (ChatGPT · Claude · Gemini · Grok · Copilot), per-user rate limiting, correlation ID observability
 - [x] Phase 4 — MCP server (Claude Desktop integration), write retry with exponential backoff
+- [ ] Phase 5 — ChatGPT Custom GPT Action *(in progress)*, Gemini / Grok / Copilot plugins *(pending)*
 
 ---
 

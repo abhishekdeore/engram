@@ -1,0 +1,186 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Engram Memory — ChatGPT Action",
+    "description": "Persistent verbatim memory across LLMs. Write conversations to memory and query them back.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://YOUR_SERVER_URL_HERE",
+      "description": "Replace with your Engram server URL (e.g. https://your-domain.com or http://localhost:8000 for local testing via ngrok)"
+    }
+  ],
+  "paths": {
+    "/chatgpt/write": {
+      "post": {
+        "operationId": "memory_write",
+        "summary": "Save a conversation to persistent memory",
+        "description": "Store the current conversation verbatim. Call this ONLY when the user explicitly asks to save, store, remember, or archive the conversation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatGPTWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Conversation accepted for storage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatGPTWriteResponse"
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid Bearer token." },
+          "403": { "description": "userId does not match token." },
+          "422": { "description": "No storable messages after filtering." }
+        },
+        "security": [{ "BearerAuth": [] }]
+      }
+    },
+    "/memory/query": {
+      "post": {
+        "operationId": "memory_query",
+        "summary": "Query persistent memory",
+        "description": "Retrieve verbatim conversation content semantically relevant to the query. Call this when the user asks about past conversations or when context from memory would improve the response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verbatim memory results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid Bearer token." }
+        },
+        "security": [{ "BearerAuth": [] }]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Engram API key. Generate via POST /auth/apikey. Paste the api_key value here."
+      }
+    },
+    "schemas": {
+      "ChatGPTMessage": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Message role: user or assistant."
+          },
+          "content": {
+            "type": "string",
+            "description": "Verbatim message content."
+          }
+        }
+      },
+      "ChatGPTWriteRequest": {
+        "type": "object",
+        "required": ["userId", "messages"],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "Your Engram userId (must match the API key)."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable UUID for this conversation. Generate once per conversation for idempotent writes. If omitted the server auto-generates one."
+          },
+          "model": {
+            "type": "string",
+            "default": "gpt-4o",
+            "description": "OpenAI model name, e.g. gpt-4o."
+          },
+          "messages": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ChatGPTMessage" },
+            "description": "Conversation turns. system/tool roles are ignored."
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional conversation title."
+          }
+        }
+      },
+      "ChatGPTWriteResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "message": { "type": "string" },
+          "conversationId": { "type": "string" },
+          "messageCount": { "type": "integer" },
+          "provider": { "type": "string" }
+        }
+      },
+      "QueryRequest": {
+        "type": "object",
+        "required": ["userId", "query"],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "Your Engram userId."
+          },
+          "query": {
+            "type": "string",
+            "description": "Natural language query to search memory."
+          },
+          "topK": {
+            "type": "integer",
+            "default": 5,
+            "description": "Maximum number of results to return (1–20)."
+          },
+          "tokenBudget": {
+            "type": "integer",
+            "default": 4000,
+            "description": "Maximum tokens in the assembled response."
+          },
+          "providers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Filter by provider (chatgpt, claude, gemini, grok, copilot). Omit for all."
+          }
+        }
+      },
+      "QueryResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "description": "Verbatim conversation results ranked by relevance."
+          },
+          "totalResults": { "type": "integer" },
+          "tokenCount": { "type": "integer" },
+          "queryLatencyMs": { "type": "number" },
+          "dateFilterApplied": { "type": "boolean" },
+          "searchMode": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -266,3 +266,93 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     userId: str
+
+
+# ── Phase 5: ChatGPT Custom GPT Action models ─────────────────────────────────
+
+class ChatGPTMessage(BaseModel):
+    """
+    A single message as sent by a ChatGPT Custom GPT Action.
+    Accepts role + content only — no pre-generated IDs or timestamps required.
+    system/tool roles are silently filtered out before storage.
+    """
+
+    model_config = ConfigDict(extra="ignore")   # GPT may send extra fields; ignore them
+
+    role: str = Field(..., description="Message role: user, assistant, system, tool.")
+    content: str = Field(..., min_length=0, description="Verbatim message content.")
+
+
+class ChatGPTWriteRequest(BaseModel):
+    """
+    Simplified write payload accepted by POST /chatgpt/write.
+    Designed to be constructable by a Custom GPT Action without any
+    pre-processing — the server normalises internally via the chatgpt adapter.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    userId: str = Field(
+        ...,
+        min_length=1,
+        description="Master userId — must match the Bearer token sub claim.",
+    )
+    conversationId: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Stable UUID v4 for this conversation. If omitted the server generates one. "
+            "Providing the same conversationId on repeated writes is idempotent."
+        ),
+    )
+    model: str = Field(
+        default="gpt-4o",
+        min_length=1,
+        description="OpenAI model identifier, e.g. 'gpt-4o', 'gpt-4-turbo'.",
+    )
+    messages: list[ChatGPTMessage] = Field(
+        ...,
+        min_length=1,
+        description="Ordered conversation turns. system/tool roles are filtered out.",
+    )
+    title: str | None = Field(
+        default=None,
+        description="Optional conversation title (metadata only, not stored in graph).",
+    )
+
+
+class ChatGPTWriteResponse(BaseModel):
+    """Returned immediately (202 Accepted) when a ChatGPT write is accepted."""
+
+    status: str = "accepted"
+    message: str = "Conversation queued for storage"
+    conversationId: str       # echoed back (useful when server generated it)
+    messageCount: int         # number of user/assistant turns stored (after filtering)
+    provider: str = "chatgpt"
+
+
+# ── Phase 5: API Key issuance (third-party integrations) ─────────────────────
+
+class ApiKeyRequest(BaseModel):
+    """Request body for POST /auth/apikey."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    userId: str = Field(
+        ...,
+        min_length=1,
+        description="The userId this API key will authenticate as.",
+    )
+
+
+class ApiKeyResponse(BaseModel):
+    """
+    Long-lived API key response.
+    The api_key value is a signed JWT valid for 1 year.
+    Store it securely — it authenticates as userId for all memory operations.
+    """
+
+    api_key: str
+    token_type: str = "bearer"
+    userId: str
+    expires_at: str           # ISO-8601 timestamp when the key expires
