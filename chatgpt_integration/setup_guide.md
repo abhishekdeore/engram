@@ -215,3 +215,232 @@ Writes are **idempotent** — sending the same `conversationId` twice stores the
 4. **ngrok URLs expire** — free ngrok tunnels change on restart; testing sessions can break unexpectedly.
 
 These limitations do not exist with the MCP HTTP/SSE server (Part A). The Custom GPT path is retained only for testing the write/query pipeline today.
+
+---
+
+## Part C — Production Submission: ChatGPT App Directory
+
+> This is how Engram appears in **normal ChatGPT chats** for any user — no Custom GPT, no
+> per-user setup. Users browse the App Directory, connect Engram once, and then activate it
+> in any chat via the `+` (Tools) button or by typing `@Engram`.
+>
+> **Prerequisites before starting this section:**
+> - `mcp_server_http.py` is deployed publicly on a stable HTTPS domain (not ngrok)
+> - Your domain is verifiable (you can serve a static file at `/.well-known/openai-apps-challenge`)
+> - You have a verified OpenAI organization (individual or business identity verification required)
+> - You are using a **global data residency** OpenAI project — EU data residency projects cannot submit apps
+
+---
+
+### What You Are Submitting
+
+An MCP server running the **Streamable HTTP transport** (not the old SSE transport). ChatGPT
+connects to your `/mcp` endpoint, discovers the `memory_write` and `memory_query` tools, and
+calls them directly inside normal chat sessions.
+
+The `mcp_server_http.py` already implements Streamable HTTP via `StreamableHTTPSessionManager`.
+The primary remaining work before submission is:
+
+1. Deploy it publicly with HTTPS
+2. Add OAuth 2.1 (ChatGPT does not support static API keys for App Directory apps)
+3. Add required tool annotations
+4. Complete the submission form
+
+---
+
+### Step 1 — Deploy the MCP HTTP Server Publicly
+
+The server must be reachable by OpenAI over HTTPS. ngrok is acceptable for testing but not
+for App Directory submission.
+
+**Recommended deployment (Railway or Render):**
+
+```bash
+# The MCP HTTP server is a standalone Uvicorn/Starlette app
+# Entry point: engram-mcp-http (port 8001 by default)
+# Env vars needed on the host:
+#   MCP_HTTP_PORT=443 (or let the platform handle it)
+#   MCP_HTTP_HOST=0.0.0.0
+#   NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE
+#   OPENAI_API_KEY
+#   JWT_SECRET_KEY
+```
+
+Your public MCP endpoint will be:
+```
+https://your-domain.com/mcp
+```
+
+---
+
+### Step 2 — Add OAuth 2.1 (Required for App Directory)
+
+> **Critical:** ChatGPT does not support static API keys for App Directory apps.
+> The Bearer token auth currently in `mcp_server_http.py` works for private/testing use
+> but must be replaced with OAuth 2.1 + PKCE for the public App Directory.
+
+**What ChatGPT expects:**
+
+ChatGPT performs the following sequence when a user connects Engram for the first time:
+
+1. Fetches `GET https://your-domain.com/.well-known/oauth-protected-resource`
+2. Fetches your OAuth authorization server metadata
+3. Performs **Dynamic Client Registration (DCR)** — registers a new `client_id` per user session
+4. Launches Authorization Code + PKCE (S256) flow — user approves in a browser popup
+5. Exchanges auth code for access token
+6. Sends `Authorization: Bearer <token>` on all subsequent `/mcp` requests
+
+**Your OAuth server must expose:**
+
+```
+GET /.well-known/oauth-protected-resource
+→ { "resource": "https://your-domain.com", "authorization_servers": ["https://your-domain.com"], "scopes_supported": ["memory:read", "memory:write"] }
+
+GET /.well-known/oauth-authorization-server
+→ { "authorization_endpoint", "token_endpoint", "registration_endpoint", "code_challenge_methods_supported": ["S256"] }
+```
+
+**OAuth redirect URI to allow:**
+```
+https://platform.openai.com/apps-manage/oauth
+```
+
+**Important gotcha — state parameter size:** OpenAI's OAuth state parameter is 400+ characters
+of base64-encoded JSON. Store it in a `TEXT` column, not `VARCHAR(255)`.
+
+**Implementation options:**
+- Use an auth provider (Auth0, Keycloak, Supabase Auth) — configure DCR and PKCE in their dashboard
+- Build a minimal OAuth server in FastAPI alongside the existing REST API (recommended for Engram — keeps everything in one codebase)
+
+---
+
+### Step 3 — Add Required Tool Annotations to `mcp_tools.py`
+
+Every tool must declare three annotations — these are **mandatory** for App Directory review.
+Missing any of them is treated as a validation failure.
+
+In `src/memory/mcp_tools.py`, update the tool definitions to include:
+
+```python
+# For memory_write:
+annotations={
+    "readOnlyHint": False,       # write tool — modifies data
+    "openWorldHint": False,      # bounded target (user's own Neo4j graph only)
+    "destructiveHint": False,    # writes are idempotent, not destructive
+}
+
+# For memory_query:
+annotations={
+    "readOnlyHint": True,        # read-only — no data modification
+    "openWorldHint": False,      # bounded target (user's own Neo4j graph only)
+    "destructiveHint": False,    # read only, never destructive
+}
+```
+
+---
+
+### Step 4 — Add Domain Verification Endpoint
+
+OpenAI tests this endpoint immediately when you click Submit. It must be live before submission.
+
+Add to your FastAPI app (`main.py`) or serve as a static file:
+
+```python
+@app.get("/.well-known/openai-apps-challenge")
+async def openai_challenge():
+    # Replace with the token OpenAI provides during submission
+    return PlainTextResponse("OPENAI_PROVIDED_TOKEN_HERE")
+```
+
+---
+
+### Step 5 — Submit via the OpenAI Platform Dashboard
+
+1. Go to `platform.openai.com` → **ChatGPT Apps** → **+ New App**
+2. Fill in the submission form:
+
+**App Identity:**
+| Field | Value |
+|-------|-------|
+| App name | Engram Memory |
+| Logo/icon | SVG, 64×64px — test in dark mode |
+| Subtitle | Persistent verbatim memory across every LLM |
+| Description | Engram stores and retrieves your LLM conversations word-for-word across ChatGPT, Claude, Gemini, and more. Nothing is summarised or modified. |
+| Category | Productivity |
+| Privacy policy URL | your-domain.com/privacy |
+| Terms of service URL | your-domain.com/terms |
+
+**MCP Server:**
+| Field | Value |
+|-------|-------|
+| MCP server URL | `https://your-domain.com/mcp` |
+| OAuth redirect URI | `https://platform.openai.com/apps-manage/oauth` |
+
+3. Click **Scan Tools** — OpenAI calls your server's `tools/list`. Both `memory_write` and `memory_query` must appear with their annotations.
+
+4. **Tool justifications** (required for each tool):
+
+For `memory_write`:
+> Read-only: No — this tool writes conversation data to a Neo4j graph database owned by the authenticated user. Open-world: No — the tool only writes to the user's own isolated memory graph; it cannot access arbitrary external systems. Destructive: No — all writes use MERGE semantics (idempotent); re-sending the same conversation is a no-op.
+
+For `memory_query`:
+> Read-only: Yes — this tool only retrieves data; it does not modify anything. Open-world: No — retrieval is scoped to the authenticated user's own memory graph via userId predicate enforced at the Cypher level. Destructive: No — read-only operation with no side effects.
+
+5. **Test cases** (minimum 5 positive, 3 negative):
+
+Positive:
+- "Save this conversation to my memory" → `memory_write` → "Conversation queued for storage"
+- "Remember what we just discussed" → `memory_write` → "Conversation queued for storage"
+- "Do you remember the quantum computing research?" → `memory_query` → verbatim content returned
+- "What did I say about my favorite color?" → `memory_query` → verbatim content returned
+- "Pull up our conversation about machine learning from last week" → `memory_query` → verbatim content returned
+
+Negative:
+- "What's the weather today?" → no tool called (not a memory operation)
+- "Write me a poem about the ocean" → no tool called (generative request)
+- "What did you just say?" (referring to current session) → no tool called (refers to current context, not stored memory)
+
+6. **Screenshots:** Exactly 706px wide, 400–860px tall. Capture:
+   - A ChatGPT chat showing `@Engram` being triggered
+   - The tool call debug panel showing `memory_query` returning verbatim results
+   - Cross-LLM example: memory written from Claude visible in ChatGPT
+
+7. Click **Submit for Review** — you receive a Case ID by email.
+
+---
+
+### Step 6 — After Approval
+
+1. OpenAI emails you when the review is complete.
+2. Log back into `platform.openai.com` → ChatGPT Apps → your app → click **Publish**.
+3. The app is now live in the App Directory at `chatgpt.com/apps`.
+4. Users connect it once via **Settings → Apps** or find it in the directory.
+5. In any normal chat: click `+` (Tools) → More → Engram, or type `@Engram`.
+6. `memory_write` and `memory_query` are now available in all standard ChatGPT conversations — no Custom GPT needed.
+
+---
+
+### Review Process and Timeline
+
+| Stage | Notes |
+|-------|-------|
+| Submission | Automated scan runs immediately (MCP connectivity, tool annotations, domain verification) |
+| Review | No published SLA — OpenAI states timelines vary. Expect days to weeks. |
+| Outcome | Approved → you manually publish. Rejected → feedback provided; must start a new submission (no amend flow — save your form content locally before submitting). |
+| Post-publication | Apps that are unstable or non-compliant may be removed. Monitor uptime on your MCP server. |
+
+---
+
+### Known Limitations and Gotchas
+
+| Issue | Detail |
+|-------|--------|
+| No API key support | ChatGPT cannot pass static API keys to App Directory apps. OAuth 2.1 is mandatory. |
+| DCR at scale | Each user session registers a new OAuth client dynamically. Design your auth server for thousands of short-lived clients. |
+| EU data residency | Projects with EU data residency cannot submit apps. Use a global project. |
+| Rejection = start over | There is no "amend and resubmit" flow. Copy your form content before clicking Submit. |
+| Streamable HTTP only | App Directory uses Streamable HTTP (`/mcp` endpoint, POST + GET). The old SSE transport (`/sse` endpoint) is deprecated — do not use it. Some older OpenAI docs still show SSE; those pages refer to the Responses API (API-to-API), not ChatGPT Apps. |
+| Tool annotations mandatory | `readOnlyHint`, `openWorldHint`, `destructiveHint` must be present on every tool. Missing = validation failure. |
+| Screenshot dimensions exact | Must be exactly 706px wide, 400–860px tall. |
+| State parameter size | OAuth state from OpenAI is 400+ characters. Store in TEXT column, not VARCHAR(255). |
+| Business/Enterprise workspaces | Workspace admins must enable apps before users can connect them. |
