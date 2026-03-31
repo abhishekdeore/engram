@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="")
     embedding_cache_ttl_seconds: int = Field(default=3600)
 
+    # ── MCP HTTP server (Phase 5) ─────────────────────────────────────────────
+    mcp_http_port: int = Field(default=8001)
+    mcp_http_host: str = Field(default="0.0.0.0")
+
     @model_validator(mode="after")
     def _validate_production_safety(self) -> Self:
         """

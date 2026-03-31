@@ -358,6 +358,26 @@ async def get_action_spec(request: Request) -> JSONResponse:
                         "results": {
                             "type": "array",
                             "description": "Verbatim conversation results ranked by relevance.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "conversationId": {"type": "string"},
+                                    "provider": {"type": "string"},
+                                    "model": {"type": "string"},
+                                    "score": {"type": "number"},
+                                    "messages": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "role": {"type": "string"},
+                                                "content": {"type": "string"},
+                                                "timestamp": {"type": "string"},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
                         },
                         "totalResults": {"type": "integer"},
                         "tokenCount": {"type": "integer"},

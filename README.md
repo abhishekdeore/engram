@@ -35,7 +35,8 @@ The memory pipeline **never calls a generative model**. What goes in comes out u
 | Semantic search | Neo4j vector index, cosine similarity |
 | Rate limiting | slowapi (per-user, JWT-decoded key) |
 | Cache | Redis (optional — embedding cache) |
-| MCP | `mcp==1.26.0`, stdio transport (Claude Desktop) |
+| MCP (stdio) | `mcp==1.26.0`, stdio transport — Claude Desktop |
+| MCP (HTTP/SSE) | `mcp==1.26.0`, streamable HTTP transport — ChatGPT Apps and all MCP-over-HTTP clients |
 | Runtime | Python 3.11, uv |
 
 ---
@@ -101,8 +102,10 @@ Conversations are segmented into 20-message blocks (`Segment` nodes) — the uni
 - [x] Phase 1 — Write API, segmentation, JWT auth
 - [x] Phase 2 — Embedding pipeline, semantic search, query API
 - [x] Phase 3 — Read/delete API, provider adapters (ChatGPT · Claude · Gemini · Grok · Copilot), per-user rate limiting, correlation ID observability
-- [x] Phase 4 — MCP server (Claude Desktop integration), write retry with exponential backoff
-- [ ] Phase 5 — ChatGPT Custom GPT Action *(in progress)*, Gemini / Grok / Copilot plugins *(pending)*
+- [x] Phase 4 — MCP server (Claude Desktop, stdio transport), write retry with exponential backoff
+- [x] Phase 5A — ChatGPT Custom GPT Action (REST testing bridge), MCP HTTP/SSE server (`engram-mcp-http`, streamable HTTP transport)
+- [ ] Phase 5B — Gemini MCP server *(pending)*
+- [ ] Phase 5C — Grok, Copilot MCP servers *(pending)*
 
 ---
 

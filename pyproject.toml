@@ -35,6 +35,7 @@ dependencies = [
 
 [project.scripts]
 engram-mcp = "memory.mcp_server:run"
+engram-mcp-http = "memory.mcp_server_http:run"
 
 [project.optional-dependencies]
 dev = [

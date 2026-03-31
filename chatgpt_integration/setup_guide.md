@@ -21,59 +21,52 @@ The MCP path (HTTP/SSE transport, submitted to the ChatGPT App Directory) is how
 
 ## Part A — Production Path: MCP HTTP/SSE Server
 
-> Status: **PENDING** (to be built in Phase 5A permanent).
-> The Custom GPT Action in Part B is the testing bridge until this is complete.
+> Status: **BUILT** (Phase 5A permanent complete).
+> The server is ready to deploy. The Custom GPT Action in Part B remains available as a testing path.
 
-### What needs to be built
+### What was built
 
-The existing `src/memory/mcp_server.py` (Phase 4) uses `stdio` transport — the correct approach for Claude Desktop. ChatGPT Apps require **MCP over HTTP/SSE** (also called "streamable HTTP").
+`src/memory/mcp_server_http.py` — a standalone MCP server using the Streamable HTTP transport
+(`StreamableHTTPSessionManager`, `stateless=True`). Runs on port 8001 by default.
 
-The `memory_write` and `memory_query` tool logic requires **zero changes**. Only the transport layer changes.
+Key properties:
+- Same `memory_write` and `memory_query` tools as the Claude Desktop stdio server — tool logic is shared via `src/memory/mcp_tools.py`, zero duplication
+- Bearer token auth: `BearerAuthMiddleware` validates the JWT on every `/mcp` request before the MCP session starts
+- Per-request `user_id` isolation via `contextvars.ContextVar` — concurrent requests from different users are safe
+- `/health` endpoint (no auth required) for liveness probes
+- Configurable via `MCP_HTTP_PORT` (default `8001`) and `MCP_HTTP_HOST` (default `0.0.0.0`) env vars
 
-### Build steps (Phase 5A permanent)
+### Run the MCP HTTP server
 
-**1. Add HTTP/SSE transport to `mcp_server.py`**
+```bash
+# Start the HTTP/SSE MCP server (separate from the FastAPI server)
+uv run engram-mcp-http
 
-The MCP Python SDK supports multiple transports. Replace the stdio server entry point with an HTTP/SSE server:
-
-```python
-# In mcp_server.py, add alongside or replacing the stdio entry point:
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route
-
-# ... existing memory_write and memory_query tool definitions remain unchanged ...
-
-sse = SseServerTransport("/messages/")
-
-async def handle_sse(request):
-    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-        await app.run(streams[0], streams[1], app.create_initialization_options())
-
-starlette_app = Starlette(routes=[
-    Route("/sse", endpoint=handle_sse),
-    Mount("/messages/", app=sse.handle_post_message),
-])
+# Or with a custom port
+MCP_HTTP_PORT=9000 uv run engram-mcp-http
 ```
 
-**2. Deploy publicly**
+### Deployment steps (ops — not yet done)
 
-The MCP HTTP/SSE server must be reachable by OpenAI's servers over HTTPS. Deploy to Railway, Render, Fly.io, or any host. It can run as a separate process on a separate port from the FastAPI server, or alongside it.
+**1. Deploy publicly**
 
-**3. Register with the ChatGPT App Directory**
+The MCP HTTP server must be reachable by OpenAI's servers over HTTPS. Deploy as a separate
+process on port 8001, or alongside the FastAPI server on a different port. Railway, Render,
+Fly.io, and AWS all work.
+
+**2. Register with the ChatGPT App Directory**
 
 - Go to `chatgpt.com/apps` → **Submit an app**
-- Provide: server URL, MCP manifest, tool descriptions
+- Provide: server URL (`https://your-domain.com:8001/mcp`), MCP manifest, tool descriptions
 - OpenAI reviews and approves
 - Once live: users find Engram in the App Directory and add it to their account — then `@Engram` works in any standard ChatGPT conversation
 
-**4. Authentication in the MCP path**
+**3. Authentication**
 
-The MCP HTTP/SSE server needs to authenticate users. Options:
-- OAuth 2.0 (recommended by OpenAI's App Directory)
-- API key passed in MCP connection headers
-
-The existing `POST /auth/apikey` endpoint already issues stable 1-year JWTs — these can be reused as API keys for the MCP connection if OAuth is not implemented yet.
+The server currently accepts any valid Engram JWT (from `POST /auth/apikey`) as a Bearer token.
+For App Directory submission, OpenAI may require OAuth 2.0 — the `mcp` SDK supports this via
+`auth=AuthSettings(...)` in `FastMCP` configuration. The current Bearer-token approach is
+sufficient for private/beta deployments.
 
 ---
 
