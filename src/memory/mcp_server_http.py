@@ -5,8 +5,9 @@ Exposes the same memory_write and memory_query tools as mcp_server.py (stdio),
 but over the MCP Streamable HTTP transport.  This is the production integration
 path for ChatGPT Apps, Gemini Extensions, and any MCP-over-HTTP client.
 
-Tool logic is imported from mcp_tools.py — zero duplication with the stdio
-server.
+Tool logic is imported from mcp_tools.py.  Note: the stdio server
+(mcp_server.py) inlines its own tool schemas and acts as an HTTP client to the
+Engram API — it does not import mcp_tools.py.
 
 Architecture:
   - Uses the low-level mcp.server.Server class (same as the stdio server) with

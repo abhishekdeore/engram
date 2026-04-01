@@ -1,9 +1,10 @@
 """
-MCP Tool Implementations — shared between stdio and HTTP transports.
+MCP Tool Implementations — used by the HTTP/SSE transport.
 
-Both mcp_server.py (stdio, Claude Desktop) and mcp_server_http.py (HTTP/SSE,
-ChatGPT Apps and other LLMs) import these functions.  No tool logic is
-duplicated between the two transport layers.
+mcp_server_http.py (Streamable HTTP, for ChatGPT Apps and other LLMs) imports
+these functions.  The stdio server (mcp_server.py) does NOT import this module;
+it inlines its own tool schemas and forwards requests to the Engram API server
+as a lightweight HTTP client.
 
 Functions:
   handle_memory_write  — normalise a conversation via the claude adapter, then
