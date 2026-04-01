@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #030014;
+  --bg-surface: rgba(255, 255, 255, 0.04);
+  --bg-surface-hover: rgba(255, 255, 255, 0.07);
+  --text: #E2DFD6;
+  --text-muted: #7E7B93;
+  --text-dim: #5D5A73;
+  --accent: #E09F3E;
+  --accent-bright: #F4B85C;
+  --synapse: #FF6B35;
+  --neural: #4F46E5;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.14);
+
+  /* Provider colors */
+  --chatgpt: #10A37F;
+  --claude: #D97706;
+  --gemini: #4285F4;
+  --grok: #E2DFD6;
+  --copilot: #6366F1;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-bright: var(--accent-bright);
+  --color-synapse: var(--synapse);
+  --color-neural: var(--neural);
+  --color-surface: var(--bg-surface);
+  --color-border: var(--border);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Subtle radial glow behind the page center */
+body::before {
+  content: "";
+  position: fixed;
+  top: 30%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 800px;
+  height: 800px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(224, 159, 62, 0.04) 0%,
+    rgba(79, 70, 229, 0.02) 40%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+::selection {
+  background: rgba(224, 159, 62, 0.25);
+  color: var(--text);
+}
+
+/* Global focus-visible ring for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid rgba(224, 159, 62, 0.5);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
