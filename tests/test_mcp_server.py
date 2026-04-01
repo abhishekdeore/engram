@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from memory.api.main import app
 from memory.auth.jwt_handler import create_access_token
 from memory.config import settings
-from memory.mcp_server import handle_memory_query, handle_memory_write
+from memory.mcp_tools import handle_memory_query, handle_memory_write
 from memory.services.embedding_service import EMBEDDING_DIMS
 
 # ── Constants ─────────────────────────────────────────────────────────────────

@@ -3,27 +3,27 @@
     "Engram MCP server configuration for Claude Desktop.",
     "",
     "SETUP:",
-    "1. Replace 'your-stable-user-id' with a consistent identifier (e.g. your email or a UUID).",
-    "   This is the key that links your memory across all LLM providers — keep it stable.",
-    "2. Replace the cwd path with the absolute path to your cross-llm-memory directory.",
-    "3. Copy this file (without these _comment lines) to:",
+    "1. Get an API key: curl -X POST https://your-engram-server/auth/apikey -H 'Content-Type: application/json' -d '{\"userId\": \"your-email\"}'",
+    "2. Replace ENGRAM_API_URL with your Engram server URL.",
+    "3. Replace ENGRAM_API_KEY with the api_key from step 1.",
+    "4. Replace the cwd path with the absolute path to your engram directory.",
+    "5. Copy this file (without these _comment lines) to:",
     "     macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json",
     "     Windows: %APPDATA%\\Claude\\claude_desktop_config.json",
-    "4. Restart Claude Desktop.",
+    "6. Restart Claude Desktop.",
     "",
     "PREREQUISITES:",
-    "  - Neo4j running (bolt://localhost:7687 or configure NEO4J_URI below)",
-    "  - .env file present in the cwd directory with NEO4J_PASSWORD and JWT_SECRET_KEY",
     "  - uv installed (https://docs.astral.sh/uv/)",
-    "  - Schema applied: uv run python scripts/setup_schema.py"
+    "  - That's it. No database, no API keys to manage."
   ],
   "mcpServers": {
     "engram-memory": {
       "command": "uv",
       "args": ["run", "engram-mcp"],
-      "cwd": "/Users/abhishekdeore/dummy/memory/cross-llm-memory",
+      "cwd": "/path/to/engram",
       "env": {
-        "MCP_USER_ID": "your-stable-user-id"
+        "ENGRAM_API_URL": "https://engram-production-d6d1.up.railway.app",
+        "ENGRAM_API_KEY": "your-api-key-from-auth-apikey"
       }
     }
   }

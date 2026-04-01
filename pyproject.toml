@@ -31,6 +31,8 @@ dependencies = [
     "slowapi>=0.1.9",
     # MCP server (Phase 4+)
     "mcp>=1.0.0",
+    # HTTP client (MCP stdio → API)
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]

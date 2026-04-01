@@ -576,9 +576,13 @@ class TestMcpToolsModule:
         from memory.mcp_tools import MEMORY_QUERY_SCHEMA
         assert "query" in MEMORY_QUERY_SCHEMA["properties"]
 
-    def test_stdio_server_re_exports_handlers(self):
-        """mcp_server.py must still expose handle_memory_write/query for Phase 4 tests."""
-        from memory.mcp_server import handle_memory_write as hw, handle_memory_query as hq
-        from memory.mcp_tools import handle_memory_write as hw2, handle_memory_query as hq2
-        assert hw is hw2
-        assert hq is hq2
+    def test_stdio_server_is_api_client_mode(self):
+        """mcp_server.py (stdio) is now an HTTP client -- it does not import handler functions directly."""
+        from memory import mcp_server
+        # The stdio server should NOT have handle_memory_write/query as attributes
+        # (it calls the API instead of importing them)
+        assert not hasattr(mcp_server, "handle_memory_write")
+        assert not hasattr(mcp_server, "handle_memory_query")
+        # It should have the API client functions
+        assert hasattr(mcp_server, "_api_write")
+        assert hasattr(mcp_server, "_api_query")

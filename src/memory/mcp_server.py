@@ -1,51 +1,46 @@
 """
-MCP Server — Phase 4 (stdio transport)
-========================================
+MCP Server — stdio transport (API client mode)
+================================================
 Exposes two tools to Claude Desktop via the Model Context Protocol:
 
-  memory_write  — save a Claude conversation verbatim to Neo4j
+  memory_write  — save a Claude conversation verbatim
   memory_query  — retrieve stored conversations via semantic search
 
 Architecture:
-  The server connects to Neo4j and OpenAI using the same Settings as the
-  FastAPI service (reads from .env in the project directory).  It calls the
-  existing service layer functions directly rather than going via HTTP — this
-  avoids the need for a running HTTP server, eliminates JWT round-trips, and
-  is architecturally cleaner for a local MCP process.
+  This server is a lightweight HTTP client that forwards all requests to the
+  deployed Engram API server.  Users only need two environment variables:
 
-  Tool logic lives in mcp_tools.py — shared with mcp_server_http.py (the
-  HTTP/SSE transport used by ChatGPT Apps).  This file is the stdio-only
-  transport wrapper.
+    ENGRAM_API_URL  — the base URL of the Engram server (e.g. https://engram-production-d6d1.up.railway.app)
+    ENGRAM_API_KEY  — a Bearer token issued by POST /auth/apikey
 
-Configuration:
-  MCP_USER_ID   — required; set in claude_desktop_config.json env block
-                  (or in .env during development)
-  All other settings come from the shared Settings object (.env / environment).
+  No database credentials, no OpenAI key, no direct Neo4j connection.
+  The API server handles all storage, embedding, and retrieval.
+
+Configuration (set in claude_desktop_config.json env block):
+  ENGRAM_API_URL  — required
+  ENGRAM_API_KEY  — required (JWT from /auth/apikey, encodes the userId)
 
 Usage (Claude Desktop):
   See claude_desktop_config.json in the project root.
 
 Usage (standalone / dev):
   uv run engram-mcp
-  uv run python src/memory/mcp_server.py
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
+import httpx
 import mcp.server.stdio
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-from neo4j import AsyncGraphDatabase, AsyncDriver
-from openai import AsyncOpenAI
 
-from .config import settings
 from .mcp_tools import (
-    handle_memory_write,
-    handle_memory_query,
     MEMORY_WRITE_DESCRIPTION,
     MEMORY_WRITE_SCHEMA,
     MEMORY_QUERY_DESCRIPTION,
@@ -58,19 +53,137 @@ logger = logging.getLogger(__name__)
 
 server = Server("engram-memory")
 
-# ── Module-level shared state (initialised in main()) ─────────────────────────
-# Using module-level state rather than a class because the MCP server is a
-# single-process, single-user subprocess — there is no concurrency concern
-# between tool calls at this level.
+# ── Module-level config (initialised in main()) ─────────────────────────────
 
-_driver: AsyncDriver | None = None
-_openai_client: AsyncOpenAI | None = None
-_redis_client = None
+_api_url: str = ""
+_api_key: str = ""
 _user_id: str = ""
+_http_client: httpx.AsyncClient | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MCP protocol handlers — thin wrappers over the testable core functions
+# API client helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _api_write(args: dict) -> str:
+    """Call POST /memory/write on the Engram API server."""
+    conversation_id = (args.get("conversation_id") or "").strip()
+    model = (args.get("model") or "").strip()
+    raw_messages = args.get("messages") or []
+
+    if not conversation_id:
+        raise ValueError("conversation_id is required")
+    if not model:
+        raise ValueError("model is required")
+    if not raw_messages:
+        raise ValueError("messages must contain at least one turn")
+
+    # Build the CMF payload expected by POST /memory/write
+    messages = []
+    for i, msg in enumerate(raw_messages):
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        timestamp = msg.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        messages.append({
+            "messageId": f"{conversation_id}-msg-{i}",
+            "role": role,
+            "content": content,
+            "timestamp": timestamp,
+            "tokenCount": len(content.split()),
+        })
+
+    payload = {
+        "userId": _user_id,
+        "conversationId": conversation_id,
+        "provider": "claude",
+        "model": model,
+        "messages": messages,
+    }
+
+    resp = await _http_client.post(
+        f"{_api_url}/memory/write",
+        json=payload,
+        headers={"Authorization": f"Bearer {_api_key}"},
+        timeout=30.0,
+    )
+
+    if resp.status_code == 202:
+        return f"Saved {len(messages)} message(s) from conversation '{conversation_id}' to memory."
+
+    # Error handling
+    try:
+        detail = resp.json().get("detail", resp.text)
+    except Exception:
+        detail = resp.text
+    raise RuntimeError(f"Write failed (HTTP {resp.status_code}): {detail}")
+
+
+async def _api_query(args: dict) -> str:
+    """Call POST /memory/query on the Engram API server."""
+    query = (args.get("query") or "").strip()
+    if not query:
+        raise ValueError("query is required")
+
+    payload = {
+        "userId": _user_id,
+        "query": query,
+        "topK": max(1, min(int(args.get("top_k") or 5), 20)),
+        "tokenBudget": max(100, min(int(args.get("token_budget") or 4000), 16000)),
+    }
+
+    # Optional filters
+    if args.get("providers"):
+        payload["providers"] = args["providers"]
+    if args.get("date"):
+        payload["date"] = args["date"]
+    if args.get("date_from"):
+        payload["dateFrom"] = args["date_from"]
+    if args.get("date_to"):
+        payload["dateTo"] = args["date_to"]
+    if args.get("relative_hint"):
+        payload["relativeHint"] = args["relative_hint"]
+
+    resp = await _http_client.post(
+        f"{_api_url}/memory/query",
+        json=payload,
+        headers={"Authorization": f"Bearer {_api_key}"},
+        timeout=30.0,
+    )
+
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise RuntimeError(f"Query failed (HTTP {resp.status_code}): {detail}")
+
+    data = resp.json()
+    results = data.get("results", [])
+
+    if not results:
+        return f'No memories found matching: "{query}"'
+
+    count = len(results)
+    lines = [f"Found {count} relevant memory entr{'y' if count == 1 else 'ies'}:\n"]
+
+    for i, conv in enumerate(results, start=1):
+        provider_label = conv.get("provider", "unknown").upper()
+        model_label = conv.get("model", "unknown")
+        date_label = conv.get("conversationDate", "unknown")
+        lines.append(f"[Memory {i} -- {provider_label} ({model_label}) -- {date_label}]")
+
+        for msg in conv.get("messages", []):
+            role_label = "User" if msg.get("role") == "user" else "Assistant"
+            lines.append(f"{role_label}: {msg.get('content', '')}")
+
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP protocol handlers
 # ─────────────────────────────────────────────────────────────────────────────
 
 @server.list_tools()
@@ -97,13 +210,9 @@ async def _call_tool(
     args = arguments or {}
 
     if name == "memory_write":
-        text = await handle_memory_write(
-            args, _driver, _openai_client, _redis_client, _user_id
-        )
+        text = await _api_write(args)
     elif name == "memory_query":
-        text = await handle_memory_query(
-            args, _driver, _openai_client, _redis_client, _user_id
-        )
+        text = await _api_query(args)
     else:
         raise ValueError(f"Unknown tool: {name!r}")
 
@@ -114,75 +223,84 @@ async def _call_tool(
 # Server lifecycle
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _decode_user_id_from_jwt(token: str) -> str:
+    """Extract userId from JWT without verification (server verifies it)."""
+    import base64
+    # JWT is header.payload.signature -- decode the payload
+    parts = token.split(".")
+    if len(parts) != 3:
+        return ""
+    # Add padding
+    payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("sub", "")
+    except Exception:
+        return ""
+
+
 async def main() -> None:
     """
-    Initialise shared clients, start the MCP server over stdio.
-
-    Called by the `engram-mcp` CLI entry point (via run()) or directly.
+    Initialise HTTP client, start the MCP server over stdio.
     """
-    global _driver, _openai_client, _redis_client, _user_id
+    global _api_url, _api_key, _user_id, _http_client
 
-    # ── Resolve user identity ─────────────────────────────────────────────────
-    _user_id = os.environ.get("MCP_USER_ID", "").strip()
+    # ── Resolve config ────────────────────────────────────────────────────────
+    _api_url = os.environ.get("ENGRAM_API_URL", "").strip().rstrip("/")
+    _api_key = os.environ.get("ENGRAM_API_KEY", "").strip()
+
+    if not _api_url:
+        print(
+            "ERROR: ENGRAM_API_URL environment variable is not set.\n"
+            "Set it in claude_desktop_config.json env block.\n"
+            "Example: https://engram-production-d6d1.up.railway.app",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not _api_key:
+        print(
+            "ERROR: ENGRAM_API_KEY environment variable is not set.\n"
+            "Set it in claude_desktop_config.json env block.\n"
+            "Get one from: POST /auth/apikey on the Engram server.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Extract userId from the API key (JWT sub claim)
+    _user_id = _decode_user_id_from_jwt(_api_key)
     if not _user_id:
         print(
-            "ERROR: MCP_USER_ID environment variable is not set.\n"
-            "Set it in claude_desktop_config.json or in your .env file.",
+            "ERROR: Could not extract userId from ENGRAM_API_KEY.\n"
+            "Ensure the key is a valid JWT from POST /auth/apikey.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     # ── Configure logging ─────────────────────────────────────────────────────
-    # MCP uses stdio for protocol messages — log to stderr so it doesn't
-    # corrupt the protocol stream.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stderr,
     )
 
-    # ── Neo4j ─────────────────────────────────────────────────────────────────
-    logger.info("engram-mcp: connecting to Neo4j at %s", settings.neo4j_uri)
-    _driver = AsyncGraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_username, settings.neo4j_password),
-        max_connection_pool_size=settings.neo4j_max_connection_pool_size,
-        connection_timeout=settings.neo4j_connection_timeout_seconds,
-    )
+    # ── HTTP client ───────────────────────────────────────────────────────────
+    _http_client = httpx.AsyncClient()
+
+    # ── Verify connectivity ───────────────────────────────────────────────────
     try:
-        await _driver.verify_connectivity()
-        logger.info("engram-mcp: Neo4j connected")
-    except Exception as exc:
-        logger.critical("engram-mcp: Neo4j connection failed — %s", exc)
-        await _driver.close()
-        sys.exit(1)
-
-    # ── OpenAI (optional) ─────────────────────────────────────────────────────
-    if settings.openai_api_key:
-        _openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+        resp = await _http_client.get(f"{_api_url}/health", timeout=10.0)
+        health = resp.json()
         logger.info(
-            "engram-mcp: OpenAI ready — model=%s", settings.embedding_model
+            "engram-mcp: connected to %s (version=%s, neo4j=%s)",
+            _api_url,
+            health.get("version", "?"),
+            health.get("neo4j", "?"),
         )
-    else:
-        logger.warning(
-            "engram-mcp: OPENAI_API_KEY not set — "
-            "embedding disabled, full-text search only"
-        )
-
-    # ── Redis (optional) ──────────────────────────────────────────────────────
-    if settings.redis_url:
-        try:
-            import redis.asyncio as aioredis
-            _redis_client = aioredis.from_url(
-                settings.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-            )
-            await _redis_client.ping()
-            logger.info("engram-mcp: Redis connected")
-        except Exception as exc:
-            logger.warning("engram-mcp: Redis unavailable (%s) — cache disabled", exc)
-            _redis_client = None
+    except Exception as exc:
+        logger.critical("engram-mcp: cannot reach %s -- %s", _api_url, exc)
+        await _http_client.aclose()
+        sys.exit(1)
 
     logger.info("engram-mcp: starting server for user_id=%s", _user_id)
 
@@ -203,9 +321,7 @@ async def main() -> None:
             )
     finally:
         logger.info("engram-mcp: shutting down")
-        await _driver.close()
-        if _redis_client is not None:
-            await _redis_client.aclose()
+        await _http_client.aclose()
 
 
 def run() -> None:
