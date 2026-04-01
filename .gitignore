@@ -68,3 +68,5 @@ logs/
 
 # ── Internal planning docs (keep off public repo) ────────────────────────────
 planning/
+chatgpt_integration/setup_guide.md
+chatgpt_integration/action_spec.json

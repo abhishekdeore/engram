@@ -1,7 +1,11 @@
 # Engram Memory — Custom GPT System Prompt
 
 Paste this into the **Instructions** field of your Custom GPT configuration.
-Replace `YOUR_USER_ID` with your actual Engram userId.
+Replace `YOUR_USER_ID` with your actual Engram userId (provided when you were onboarded).
+
+To get a userId and API key, contact Abhishek Deore:
+- Email: abhisdeore4263@gmail.com
+- LinkedIn: https://www.linkedin.com/in/abhishekdeore/
 
 ---
 

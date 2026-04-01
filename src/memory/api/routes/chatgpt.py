@@ -155,8 +155,7 @@ async def chatgpt_write(
     summary="OpenAPI action spec for ChatGPT Custom GPT configuration",
     description=(
         "Returns the OpenAPI 3.1 spec that defines the memory_write and "
-        "memory_query actions for a Custom GPT. Upload the response body "
-        "(or the chatgpt_integration/action_spec.json file) to the Custom "
+        "memory_query actions for a Custom GPT. Import this URL in the Custom "
         "GPT's Action configuration in the ChatGPT editor."
     ),
     include_in_schema=False,   # not part of the Engram API — it IS the spec

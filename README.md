@@ -73,7 +73,7 @@ Engram integrates natively with every major LLM through the **Model Context Prot
 | Provider | Integration | Status |
 |----------|------------|--------|
 | **Claude** (Anthropic) | MCP stdio -- runs directly in Claude Desktop | Live |
-| **ChatGPT** (OpenAI) | MCP Streamable HTTP -- available via ChatGPT App Directory | Built, pending deployment |
+| **ChatGPT** (OpenAI) | Custom GPT Action + MCP Streamable HTTP server | Live (Custom GPT), MCP pending App Directory |
 | **Gemini** (Google) | MCP server | Planned |
 | **Grok** (xAI) | MCP server | Planned |
 | **Copilot** (Microsoft) | MCP server / Copilot Extensions | Planned |
@@ -187,6 +187,69 @@ If vector search finds no strong matches, a full-text fallback ensures natural l
 
 ---
 
+## Getting Access
+
+Engram is in active development. Self-registration is not available yet. To get onboarded:
+
+1. **Contact Abhishek Deore** to request an API key and user ID:
+   - Email: **abhisdeore4263@gmail.com**
+   - LinkedIn: [Abhishek Deore](https://www.linkedin.com/in/abhishekdeore/) -- send a message
+
+2. You will receive:
+   - An **API URL** (the Engram server address)
+   - An **API Key** (a JWT that encodes your user ID, valid for 1 year)
+
+That is all you need. No database credentials, no OpenAI key, no server setup.
+
+---
+
+## Setup -- Claude Desktop
+
+**Prerequisites:** macOS or Windows, [Claude Desktop](https://claude.ai/download), Python 3.11+, [uv](https://docs.astral.sh/uv/)
+
+1. Clone the repo and install dependencies:
+   ```bash
+   git clone https://github.com/abhishekdeore/engram.git
+   cd engram
+   uv sync
+   ```
+
+2. Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+   ```json
+   {
+     "mcpServers": {
+       "engram-memory": {
+         "command": "uv",
+         "args": ["run", "engram-mcp"],
+         "cwd": "/your/path/to/engram",
+         "env": {
+           "ENGRAM_API_URL": "<your API URL>",
+           "ENGRAM_API_KEY": "<your API key>"
+         }
+       }
+     }
+   }
+   ```
+
+3. Restart Claude Desktop. Say **"Do you remember..."** or **"Save this to memory"** to use it.
+
+---
+
+## Setup -- ChatGPT (Custom GPT)
+
+1. Go to [chatgpt.com/gpts/editor](https://chatgpt.com/gpts/editor) and create a new GPT
+2. Paste the system prompt from [`chatgpt_integration/system_prompt.md`](chatgpt_integration/system_prompt.md)
+3. Under **Actions**, click **Import from URL** and paste:
+   ```
+   https://engram-production-d6d1.up.railway.app/chatgpt/action-spec
+   ```
+4. Set authentication: **API Key** / **Bearer** / paste your API key
+5. Save the GPT. Done -- say **"Save this conversation"** or **"Do you remember..."**
+
+For detailed instructions, troubleshooting, and the system prompt reference, see [`CHATGPT_SETUP.md`](CHATGPT_SETUP.md).
+
+---
+
 ## Roadmap
 
 - [x] **Phase 0** -- Neo4j schema, constraints, vector + full-text indexes
@@ -194,7 +257,7 @@ If vector search finds no strong matches, a full-text fallback ensures natural l
 - [x] **Phase 2** -- Embedding pipeline, 3-index semantic search, query API
 - [x] **Phase 3** -- Read/delete API, provider adapters (ChatGPT, Claude, Gemini, Grok, Copilot), rate limiting, observability
 - [x] **Phase 4** -- MCP server for Claude Desktop (stdio), write retry with exponential backoff
-- [x] **Phase 5A** -- ChatGPT integration: MCP HTTP/SSE server (Streamable HTTP), Custom GPT testing bridge, API key endpoint
+- [x] **Phase 5A** -- ChatGPT integration: MCP HTTP/SSE server, Custom GPT Action, API key endpoint, MCP stdio rewrite (API client mode), Railway deployment
 - [ ] **Phase 5B** -- Gemini MCP server
 - [ ] **Phase 5C** -- Grok, Copilot MCP servers
 - [ ] **Phase 6** -- Production hardening: Docker Compose, Prometheus metrics, connection resilience
