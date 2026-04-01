@@ -21,7 +21,7 @@
     "engram-memory": {
       "command": "uv",
       "args": ["run", "engram-mcp"],
-      "cwd": "/Users/abhishekdeore/dummy/memory/cross-llm-memory",
+      "cwd": "/path/to/cross-llm-memory",
       "env": {
         "MCP_USER_ID": "your-stable-user-id"
       }
