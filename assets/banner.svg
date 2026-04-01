@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300" viewBox="0 0 900 300">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a1a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#111133;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6C63FF;stop-opacity:0" />
+      <stop offset="50%" style="stop-color:#6C63FF;stop-opacity:0.15" />
+      <stop offset="100%" style="stop-color:#6C63FF;stop-opacity:0" />
+    </linearGradient>
+  </defs>
+  <rect width="900" height="300" fill="url(#bg)" rx="12"/>
+  <rect x="0" y="120" width="900" height="60" fill="url(#glow)"/>
+
+  <!-- Node network -->
+  <!-- Central node -->
+  <circle cx="450" cy="90" r="6" fill="#6C63FF" opacity="0.9"/>
+  <!-- Surrounding nodes -->
+  <circle cx="350" cy="60" r="4" fill="#6C63FF" opacity="0.5"/>
+  <circle cx="550" cy="60" r="4" fill="#6C63FF" opacity="0.5"/>
+  <circle cx="380" cy="110" r="3.5" fill="#6C63FF" opacity="0.4"/>
+  <circle cx="520" cy="110" r="3.5" fill="#6C63FF" opacity="0.4"/>
+  <circle cx="300" cy="90" r="3" fill="#6C63FF" opacity="0.3"/>
+  <circle cx="600" cy="90" r="3" fill="#6C63FF" opacity="0.3"/>
+  <circle cx="420" cy="50" r="2.5" fill="#6C63FF" opacity="0.35"/>
+  <circle cx="480" cy="50" r="2.5" fill="#6C63FF" opacity="0.35"/>
+
+  <!-- Connections -->
+  <line x1="350" y1="60" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.8" opacity="0.25"/>
+  <line x1="550" y1="60" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.8" opacity="0.25"/>
+  <line x1="380" y1="110" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.8" opacity="0.25"/>
+  <line x1="520" y1="110" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.8" opacity="0.25"/>
+  <line x1="300" y1="90" x2="350" y2="60" stroke="#6C63FF" stroke-width="0.6" opacity="0.2"/>
+  <line x1="600" y1="90" x2="550" y2="60" stroke="#6C63FF" stroke-width="0.6" opacity="0.2"/>
+  <line x1="420" y1="50" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.6" opacity="0.2"/>
+  <line x1="480" y1="50" x2="450" y2="90" stroke="#6C63FF" stroke-width="0.6" opacity="0.2"/>
+  <line x1="350" y1="60" x2="420" y2="50" stroke="#6C63FF" stroke-width="0.5" opacity="0.15"/>
+  <line x1="550" y1="60" x2="480" y2="50" stroke="#6C63FF" stroke-width="0.5" opacity="0.15"/>
+
+  <!-- Title -->
+  <text x="450" y="175" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="56" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="4">engram</text>
+
+  <!-- Subtitle -->
+  <text x="450" y="210" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="16" font-weight="400" fill="#8888aa" text-anchor="middle" letter-spacing="2">PERSISTENT VERBATIM MEMORY ACROSS EVERY LLM</text>
+
+  <!-- Tagline -->
+  <text x="450" y="255" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" font-weight="300" fill="#6C63FF" text-anchor="middle" letter-spacing="1" opacity="0.7">zero hallucination  |  cross-provider  |  no LLM in the pipeline</text>
+</svg>
