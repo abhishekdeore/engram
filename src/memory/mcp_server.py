@@ -40,12 +40,117 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
-from .mcp_tools import (
-    MEMORY_WRITE_DESCRIPTION,
-    MEMORY_WRITE_SCHEMA,
-    MEMORY_QUERY_DESCRIPTION,
-    MEMORY_QUERY_SCHEMA,
+# Tool descriptions and schemas are inlined here to avoid importing
+# mcp_tools.py, which pulls in the full service layer and config.py.
+# In API client mode, we don't need any of that — just the schemas
+# for tool registration and the HTTP client for forwarding requests.
+
+MEMORY_WRITE_DESCRIPTION = (
+    "Save the current conversation to persistent memory. "
+    "Call this when the user explicitly asks to save, store, keep, "
+    "or remember this conversation. "
+    "The entire conversation is stored verbatim — no summarisation, "
+    "no modification. Confirm to the user once saved."
 )
+
+MEMORY_WRITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "conversation_id": {
+            "type": "string",
+            "description": (
+                "Stable identifier for this conversation. "
+                "Use the conversation's own ID if available; "
+                "otherwise generate a UUID v4."
+            ),
+        },
+        "model": {
+            "type": "string",
+            "description": "The model name, e.g. 'claude-sonnet-4-6'.",
+        },
+        "messages": {
+            "type": "array",
+            "description": "The conversation turns to save.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant"],
+                    },
+                    "content": {"type": "string"},
+                    "created_at": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp (optional).",
+                    },
+                },
+                "required": ["role", "content"],
+            },
+            "minItems": 1,
+        },
+    },
+    "required": ["conversation_id", "model", "messages"],
+}
+
+MEMORY_QUERY_DESCRIPTION = (
+    "Search persistent memory for relevant past conversations. "
+    "Call this when the user references something from a previous "
+    "session, asks 'do you remember', or needs context from prior "
+    "conversations with any LLM. "
+    "If the user mentions a time ('last week', 'yesterday'), resolve "
+    "the date to YYYY-MM-DD and pass it in the `date` field."
+)
+
+MEMORY_QUERY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Natural language description of what to search for.",
+            "minLength": 1,
+            "maxLength": 2000,
+        },
+        "top_k": {
+            "type": "integer",
+            "description": "Maximum number of conversations to return (1–20).",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20,
+        },
+        "token_budget": {
+            "type": "integer",
+            "description": "Maximum tokens in the assembled response (100–16000).",
+            "default": 4000,
+            "minimum": 100,
+            "maximum": 16000,
+        },
+        "date": {
+            "type": "string",
+            "description": "YYYY-MM-DD — search only this exact day.",
+        },
+        "date_from": {
+            "type": "string",
+            "description": "YYYY-MM-DD — start of date range (inclusive).",
+        },
+        "date_to": {
+            "type": "string",
+            "description": "YYYY-MM-DD — end of date range (inclusive).",
+        },
+        "providers": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["chatgpt", "claude", "gemini", "grok", "copilot", "custom"],
+            },
+            "description": "Restrict search to specific providers. Omit for all.",
+        },
+        "relative_hint": {
+            "type": "string",
+            "description": "The original natural-language time expression the user gave.",
+        },
+    },
+    "required": ["query"],
+}
 
 logger = logging.getLogger(__name__)
 
