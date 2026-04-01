@@ -167,6 +167,11 @@ async def get_action_spec(request: Request) -> JSONResponse:
     correctly whether accessed via localhost or a public domain.
     """
     base_url = str(request.base_url).rstrip("/")
+    # Railway (and most PaaS) terminate TLS at the proxy, so the app
+    # sees http:// even though the client used https://.  Force https
+    # when behind a reverse proxy (X-Forwarded-Proto) or in production.
+    if request.headers.get("x-forwarded-proto") == "https" or base_url.startswith("http://engram"):
+        base_url = base_url.replace("http://", "https://", 1)
 
     spec = {
         "openapi": "3.1.0",
