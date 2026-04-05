@@ -49,8 +49,9 @@ def _teardown():
             MATCH (u:User {userId: $uid})
             OPTIONAL MATCH (u)-[:HAS_CONVERSATION]->(c:Conversation)
             OPTIONAL MATCH (c)-[:HAS_MESSAGE]->(m:Message)
+            OPTIONAL MATCH (m)-[:HAS_CHUNK]->(ch:Chunk)
             OPTIONAL MATCH (c)-[:HAS_SEGMENT]->(s:Segment)
-            DETACH DELETE u, c, m, s
+            DETACH DELETE ch, s, m, c, u
             """,
             uid=uid,
         )

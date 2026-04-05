@@ -38,14 +38,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     jwt_access_token_expire_minutes: int = Field(default=10080)  # 7 days
 
-    # ── Rate Limiting (Phase 3) ───────────────────────────────────────────────
+    # ── Rate Limiting (Phase 3, tightened Phase 6) ──────────────────────────────
     # Applied per authenticated userId.
-    # Defaults are intentionally permissive for development/testing.
-    # Operators MUST lower these in production via .env:
-    #   RATE_LIMIT_WRITE_PER_MINUTE=30
-    #   RATE_LIMIT_QUERY_PER_MINUTE=60
-    rate_limit_write_per_minute: int = Field(default=600)
-    rate_limit_query_per_minute: int = Field(default=600)
+    # Phase 6: production-appropriate defaults (30 writes/min, 20 queries/min).
+    # Override via .env for development: RATE_LIMIT_WRITE_PER_MINUTE=600
+    rate_limit_write_per_minute: int = Field(default=30)
+    rate_limit_query_per_minute: int = Field(default=20)
 
     # ── Embeddings (Phase 2) ─────────────────────────────────────────────────
     openai_api_key: str = Field(default="")
@@ -55,6 +53,15 @@ class Settings(BaseSettings):
     # ── Redis Cache (Phase 2) ────────────────────────────────────────────────
     redis_url: str = Field(default="")
     embedding_cache_ttl_seconds: int = Field(default=3600)
+
+    # ── CORS (Phase 6) ──────────────────────────────────────────────────────────
+    # Comma-separated origins for production, e.g.:
+    #   CORS_ALLOWED_ORIGINS=https://engram-production-d6d1.up.railway.app,https://chatgpt.com
+    cors_allowed_origins: str = Field(default="")
+
+    # ── Usage Limits (Phase 6) ───────────────────────────────────────────────
+    free_tier_message_limit: int = Field(default=10000)
+    free_tier_daily_query_limit: int = Field(default=100)
 
     # ── MCP HTTP server (Phase 5) ─────────────────────────────────────────────
     mcp_http_port: int = Field(default=8001)

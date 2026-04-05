@@ -356,3 +356,25 @@ class ApiKeyResponse(BaseModel):
     token_type: str = "bearer"
     userId: str
     expires_at: str           # ISO-8601 timestamp when the key expires
+
+
+# ── Phase 7: Token revocation ───────────────────────────────────────────────
+
+class RevokeTokenRequest(BaseModel):
+    """Request body for POST /auth/revoke."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(
+        ...,
+        min_length=1,
+        description="The JWT token to revoke. Must belong to the authenticated user.",
+    )
+
+
+class RevokeTokenResponse(BaseModel):
+    """Confirmation that a token has been revoked."""
+
+    status: str = "revoked"
+    message: str
+    jti: str

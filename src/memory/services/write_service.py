@@ -46,6 +46,7 @@ from neo4j.exceptions import (
 )
 
 from ..config import settings
+from ..exceptions import StorageCapError
 from ..models.requests import WriteRequest
 from .segment_service import check_and_create_segments
 from .embedding_service import embed_new_content
@@ -445,3 +446,59 @@ async def _bump_conversation_count_tx(
         deltaTokens=actual_new_tokens,
         now=now,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6: Storage cap enforcement
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def check_storage_cap(driver: AsyncDriver, user_id: str) -> None:
+    """
+    Raise StorageCapError if the user has reached their message limit.
+    Called from route handlers BEFORE queuing the background write task,
+    so the error propagates as a proper HTTP response.
+    """
+    limit = settings.free_tier_message_limit
+    if limit <= 0:
+        return
+
+    current_count = await _count_user_messages(driver, user_id)
+    if current_count >= limit:
+        raise StorageCapError(
+            f"Storage limit reached ({current_count}/{limit} messages). "
+            "Delete old conversations to free space.",
+            error_code="STORAGE_CAP_EXCEEDED",
+            details={
+                "current": current_count,
+                "limit": limit,
+            },
+        )
+
+
+async def count_user_messages(driver: AsyncDriver, user_id: str) -> int:
+    """Public accessor — returns the total Message count for a user."""
+    return await _count_user_messages(driver, user_id)
+
+
+async def _count_user_messages(driver: AsyncDriver, user_id: str) -> int:
+    """Return the total number of Message nodes owned by a user."""
+    async with driver.session(database=settings.neo4j_database) as session:
+        result = await session.execute_read(
+            _count_user_messages_tx, user_id
+        )
+        return result
+
+
+async def _count_user_messages_tx(
+    tx: AsyncManagedTransaction, user_id: str
+) -> int:
+    result = await tx.run(
+        """
+        MATCH (u:User {userId: $userId})-[:HAS_CONVERSATION]->(:Conversation)
+              -[:HAS_MESSAGE]->(m:Message)
+        RETURN count(m) AS total
+        """,
+        userId=user_id,
+    )
+    record = await result.single()
+    return record["total"] if record else 0

@@ -156,8 +156,8 @@ def cleanup():
 # ── Auth: API key issuance ────────────────────────────────────────────────────
 
 class TestApiKeyIssuance:
-    def test_apikey_returns_201_and_token(self, client):
-        resp = client.post("/auth/apikey", json={"userId": TEST_USER})
+    def test_apikey_returns_201_and_token(self, client, auth_headers):
+        resp = client.post("/auth/apikey", json={"userId": TEST_USER}, headers=auth_headers)
         assert resp.status_code == 201
         data = resp.json()
         assert "api_key" in data
@@ -165,23 +165,23 @@ class TestApiKeyIssuance:
         assert data["token_type"] == "bearer"
         assert "expires_at" in data
 
-    def test_apikey_is_valid_jwt_for_user(self, client):
-        resp = client.post("/auth/apikey", json={"userId": TEST_USER})
+    def test_apikey_is_valid_jwt_for_user(self, client, auth_headers):
+        resp = client.post("/auth/apikey", json={"userId": TEST_USER}, headers=auth_headers)
         api_key = resp.json()["api_key"]
         # Decode and verify it authenticates as the correct user
         user_id = decode_access_token(api_key)
         assert user_id == TEST_USER
 
-    def test_apikey_expires_in_roughly_one_year(self, client):
-        resp = client.post("/auth/apikey", json={"userId": TEST_USER})
+    def test_apikey_expires_in_roughly_one_year(self, client, auth_headers):
+        resp = client.post("/auth/apikey", json={"userId": TEST_USER}, headers=auth_headers)
         expires_at = resp.json()["expires_at"]
         expire_dt = datetime.fromisoformat(expires_at)
         now = datetime.now(timezone.utc)
         days = (expire_dt - now).days
         assert 364 <= days <= 366
 
-    def test_apikey_authenticates_on_write_endpoint(self, client):
-        resp = client.post("/auth/apikey", json={"userId": TEST_USER})
+    def test_apikey_authenticates_on_write_endpoint(self, client, auth_headers):
+        resp = client.post("/auth/apikey", json={"userId": TEST_USER}, headers=auth_headers)
         api_key = resp.json()["api_key"]
         write_resp = client.post(
             "/chatgpt/write",
@@ -194,9 +194,24 @@ class TestApiKeyIssuance:
         )
         assert write_resp.status_code == 202
 
-    def test_apikey_missing_userId_returns_422(self, client):
-        resp = client.post("/auth/apikey", json={})
+    def test_apikey_missing_userId_returns_422(self, client, auth_headers):
+        resp = client.post("/auth/apikey", json={}, headers=auth_headers)
         assert resp.status_code == 422
+
+    def test_apikey_requires_auth(self, client):
+        """POST /auth/apikey without Bearer token must return 401/403."""
+        resp = client.post("/auth/apikey", json={"userId": TEST_USER})
+        assert resp.status_code in (401, 403)
+
+    def test_apikey_rejects_userid_mismatch(self, client, auth_headers):
+        """Authenticated as TEST_USER, requesting key for OTHER_USER must return 403."""
+        resp = client.post(
+            "/auth/apikey",
+            json={"userId": OTHER_USER},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 403
+        assert "Cannot create API keys for other users" in resp.json()["detail"]
 
     def test_token_endpoint_still_works_in_dev(self, client):
         resp = client.post("/auth/token", json={"userId": TEST_USER})
