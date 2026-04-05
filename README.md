@@ -66,7 +66,7 @@ Engram integrates natively with every major LLM through the **Model Context Prot
 |----------|--------|
 | **Claude** (Anthropic) | Live |
 | **ChatGPT** (OpenAI) | Live (Custom GPT) |
-| **Gemini** (Google) | Planned |
+| **Gemini** (Google) | Live (Gemini CLI) |
 | **Grok** (xAI) | Planned |
 | **Copilot** (Microsoft) | Planned |
 
@@ -186,13 +186,38 @@ For detailed instructions, troubleshooting, and the system prompt reference, see
 
 ---
 
+## Setup -- Gemini CLI
+
+1. Install [Gemini CLI](https://github.com/google-gemini/gemini-cli) and [uv](https://astral.sh/uv)
+2. Clone this repo and get an API key (contact details above)
+3. Add to `~/.gemini/settings.json`:
+```json
+{
+  "mcpServers": {
+    "engram-memory": {
+      "command": "/path/to/engram/.venv/bin/engram-mcp",
+      "args": [],
+      "env": {
+        "ENGRAM_API_URL": "https://your-engram-server.up.railway.app",
+        "ENGRAM_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+4. Restart Gemini CLI. Done -- say **"Save this conversation"** or **"Do you remember..."**
+
+For detailed instructions and troubleshooting, see [`GEMINI_SETUP.md`](GEMINI_SETUP.md).
+
+---
+
 ## Roadmap
 
 - [x] Core memory engine -- verbatim storage, semantic search, graph-based retrieval
 - [x] Claude Desktop integration (MCP)
 - [x] ChatGPT integration (Custom GPT Action)
 - [x] Cloud deployment with authentication and rate limiting
-- [ ] Gemini integration
+- [x] Gemini integration (Gemini CLI via MCP)
 - [ ] Grok and Copilot integrations
 - [ ] Production hardening and monitoring
 - [ ] Semantic fact versioning across conversations
