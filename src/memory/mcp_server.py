@@ -50,7 +50,9 @@ MEMORY_WRITE_DESCRIPTION = (
     "Call this when the user explicitly asks to save, store, keep, "
     "or remember this conversation. "
     "The entire conversation is stored verbatim — no summarisation, "
-    "no modification. Confirm to the user once saved."
+    "no modification. Set the 'provider' field to identify which LLM "
+    "is saving ('claude', 'gemini', 'chatgpt', etc.). "
+    "Confirm to the user once saved."
 )
 
 MEMORY_WRITE_SCHEMA = {
@@ -64,9 +66,17 @@ MEMORY_WRITE_SCHEMA = {
                 "otherwise generate a UUID v4."
             ),
         },
+        "provider": {
+            "type": "string",
+            "enum": ["claude", "chatgpt", "gemini", "grok", "copilot", "custom"],
+            "description": (
+                "Which LLM is saving this conversation. "
+                "Defaults to 'claude' if omitted."
+            ),
+        },
         "model": {
             "type": "string",
-            "description": "The model name, e.g. 'claude-sonnet-4-6'.",
+            "description": "The model name, e.g. 'claude-sonnet-4-6', 'gemini-2.5-pro'.",
         },
         "messages": {
             "type": "array",
@@ -174,6 +184,7 @@ async def _api_write(args: dict) -> str:
     """Call POST /memory/write on the Engram API server."""
     conversation_id = (args.get("conversation_id") or "").strip()
     model = (args.get("model") or "").strip()
+    provider = (args.get("provider") or "claude").strip().lower()
     raw_messages = args.get("messages") or []
 
     if not conversation_id:
@@ -201,7 +212,7 @@ async def _api_write(args: dict) -> str:
     payload = {
         "userId": _user_id,
         "conversationId": conversation_id,
-        "provider": "claude",
+        "provider": provider,
         "model": model,
         "messages": messages,
     }

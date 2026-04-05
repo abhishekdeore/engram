@@ -66,7 +66,7 @@ Engram integrates natively with every major LLM through the **Model Context Prot
 |----------|--------|
 | **Claude** (Anthropic) | Live |
 | **ChatGPT** (OpenAI) | Live (Custom GPT) |
-| **Gemini** (Google) | Planned |
+| **Gemini** (Google) | Live (Gemini CLI) |
 | **Grok** (xAI) | Planned |
 | **Copilot** (Microsoft) | Planned |
 
