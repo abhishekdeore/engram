@@ -1,7 +1,8 @@
 """
-Memory routes — Phase 1 / Phase 2 / Phase 3
-=============================================
+Memory routes — Phase 1 / Phase 2 / Phase 3 / Phase 6
+=======================================================
 POST   /memory/write                       — store a conversation verbatim (202, async)
+GET    /memory/usage                       — current usage vs limits (Phase 6)
 GET    /memory/conversations               — list user's conversations (paginated)
 GET    /memory/conversation/{id}           — read a full conversation verbatim
 DELETE /memory/conversation/{id}           — delete a conversation + cascade
@@ -22,7 +23,8 @@ from ...models.requests import (
 )
 from ...services.delete_service import delete_conversation, delete_user_data
 from ...services.read_service import get_conversation, list_conversations
-from ...services.write_service import write_conversation_to_graph
+from ...services.usage_service import get_usage_summary
+from ...services.write_service import check_storage_cap, write_conversation_to_graph
 from ..dependencies import CurrentUserId, Neo4jDriver, OpenAIClient, RedisClient
 from ..limiter import limiter
 
@@ -67,6 +69,10 @@ async def write_memory(
             ),
         )
 
+    # Phase 6: enforce storage cap BEFORE queuing background task
+    # Raises StorageCapError (→ 403) if limit reached
+    await check_storage_cap(driver, current_user_id)
+
     background_tasks.add_task(
         write_conversation_to_graph,
         driver,
@@ -87,6 +93,26 @@ async def write_memory(
         conversationId=body.conversationId,
         messageCount=len(body.messages),
     )
+
+
+# ── Usage (Phase 6) ──────────────────────────────────────────────────────────
+
+@router.get(
+    "/usage",
+    status_code=status.HTTP_200_OK,
+    summary="Current usage vs limits",
+    description=(
+        "Returns the authenticated user's current storage count, daily query "
+        "count, and their respective limits. Useful for LLM clients to check "
+        "remaining capacity before issuing writes or queries."
+    ),
+)
+async def get_memory_usage(
+    current_user_id: CurrentUserId,
+    driver: Neo4jDriver,
+    redis_client: RedisClient,
+) -> dict:
+    return await get_usage_summary(driver, current_user_id, redis_client=redis_client)
 
 
 # ── List conversations ────────────────────────────────────────────────────────

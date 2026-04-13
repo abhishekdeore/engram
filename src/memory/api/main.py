@@ -13,6 +13,7 @@ Keep workers=1 for exact rate limiting, or switch to a Redis-backed limiter.
 """
 
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 
@@ -24,6 +25,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from ..config import settings
+from ..exceptions import EngramError
 from .limiter import limiter
 from .routes import health, auth, memory, query, chatgpt
 
@@ -119,10 +121,11 @@ app = FastAPI(
         "semantic vector search. Zero hallucination — the memory pipeline "
         "never calls a generative model."
     ),
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Phase 6: disable Swagger/ReDoc in production to reduce attack surface
+    docs_url="/docs" if settings.is_development else None,
+    redoc_url="/redoc" if settings.is_development else None,
 )
 
 # Attach limiter to app state (required by slowapi)
@@ -130,34 +133,76 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
-# ── Correlation ID middleware ──────────────────────────────────────────────────
+# ── Engram structured error handler ─────────────────────────────────────────
+
+@app.exception_handler(EngramError)
+async def engram_error_handler(request: Request, exc: EngramError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+        },
+    )
+
+
+# ── Security headers + correlation ID middleware ─────────────────────────────
 
 @app.middleware("http")
-async def correlation_id_middleware(request: Request, call_next):
+async def security_and_correlation_middleware(request: Request, call_next):
     """
-    Attach a correlation ID to every request.
-    Honours X-Request-ID from the client if provided; generates a UUID otherwise.
-    Echoes the ID back in the X-Request-ID response header so clients can
-    correlate logs with responses.
+    Phase 6 hardened middleware:
+    1. Attach a sanitised correlation ID (alphanumeric + dash/underscore, max 36 chars).
+    2. Add security response headers (HSTS, X-Frame-Options, etc.).
     """
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    # Sanitise: only allow printable ASCII, max 64 chars
-    request_id = "".join(c for c in request_id if c.isprintable() and c != "\n")[:64]
+    # ── Correlation ID ────────────────────────────────────────────────────
+    raw_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    # Phase 6: strict sanitisation — alphanumeric, dash, underscore only
+    request_id = re.sub(r"[^a-zA-Z0-9\-_]", "", raw_id)[:36]
+    if not request_id:
+        request_id = str(uuid.uuid4())
 
     request.state.request_id = request_id
     response = await call_next(request)
+
+    # ── Correlation ID echo ───────────────────────────────────────────────
     response.headers["X-Request-ID"] = request_id
+
+    # ── Security headers (Phase 6) ───────────────────────────────────────
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+
     return response
 
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
+# ── CORS (Phase 6: restricted in production) ─────────────────────────────────
+
+_DEV_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://localhost:8001",
+]
+
+_PROD_ORIGINS = [
+    origin for origin in (settings.cors_allowed_origins or "").split(",")
+    if origin.strip()
+] if hasattr(settings, "cors_allowed_origins") and settings.cors_allowed_origins else []
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.is_development else [],
+    allow_origins=_DEV_ORIGINS if settings.is_development else _PROD_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    max_age=600,
 )
 
 
@@ -176,7 +221,7 @@ app.include_router(chatgpt.router)
 async def root():
     return {
         "service": "engram",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "docs": "/docs",
         "health": "/health",
     }

@@ -18,7 +18,7 @@ user_id) so they are fully testable without any MCP protocol layer.
 import logging
 from neo4j import AsyncDriver
 
-from .adapters.claude import normalize as claude_normalize
+from .adapters.normalizer import normalize as dispatch_normalize
 from .models.message import MessageIn
 from .models.requests import QueryRequest, WriteRequest
 from .services.embedding_service import embed_new_content
@@ -37,7 +37,9 @@ MEMORY_WRITE_DESCRIPTION = (
     "Call this when the user explicitly asks to save, store, keep, "
     "or remember this conversation. "
     "The entire conversation is stored verbatim — no summarisation, "
-    "no modification. Confirm to the user once saved."
+    "no modification. Set the 'provider' field to identify which LLM "
+    "is saving ('claude', 'gemini', 'chatgpt', etc.). "
+    "Confirm to the user once saved."
 )
 
 MEMORY_WRITE_SCHEMA = {
@@ -51,9 +53,17 @@ MEMORY_WRITE_SCHEMA = {
                 "otherwise generate a UUID v4."
             ),
         },
+        "provider": {
+            "type": "string",
+            "enum": ["claude", "chatgpt", "gemini", "grok", "copilot", "custom"],
+            "description": (
+                "Which LLM is saving this conversation. "
+                "Defaults to 'claude' if omitted."
+            ),
+        },
         "model": {
             "type": "string",
-            "description": "The model name, e.g. 'claude-sonnet-4-6'.",
+            "description": "The model name, e.g. 'claude-sonnet-4-6', 'gemini-2.5-pro'.",
         },
         "messages": {
             "type": "array",
@@ -154,16 +164,20 @@ async def handle_memory_write(
     """
     Save a conversation to persistent memory.
 
-    Normalises the incoming messages via the claude.py adapter (identical to
-    the server-side adapter used for POST /memory/write) and then calls
+    Normalises the incoming messages via the provider-appropriate adapter
+    (dispatched by the normalizer module) and then calls
     write_conversation_to_graph() directly — the same function used by the
     FastAPI BackgroundTask, with the Phase 4 retry logic included.
+
+    Phase 5B: accepts a `provider` field to dispatch to the correct adapter.
+    Defaults to "claude" for backward compatibility with existing Claude installs.
 
     Returns a plain-text confirmation string.
     """
     # ── Validate required fields ──────────────────────────────────────────────
     conversation_id: str = (args.get("conversation_id") or "").strip()
     model: str           = (args.get("model") or "").strip()
+    provider: str        = (args.get("provider") or "claude").strip().lower()
     raw_messages: list   = args.get("messages") or []
 
     if not conversation_id:
@@ -173,15 +187,32 @@ async def handle_memory_write(
     if not raw_messages:
         raise ValueError("messages must contain at least one turn")
 
-    # ── Normalise via the claude adapter ──────────────────────────────────────
-    # Build the Format B dict that claude.py expects:
-    #   { "id": "...", "model": "...", "messages": [{role, content, created_at?}] }
-    raw = {
-        "id":       conversation_id,
-        "model":    model,
-        "messages": raw_messages,
-    }
-    normalised = claude_normalize(raw)  # pure function — no I/O
+    # ── Normalise via the provider-appropriate adapter ───���────────────────────
+    # Build the raw dict that the adapter expects.
+    # All adapters accept: { "id": "...", "model": "...", "messages": [...] }
+    # Claude/ChatGPT/Grok/Copilot use: { "id", "model", "messages": [{role, content}] }
+    # Gemini uses: { "id", "model", "contents": [{role, parts: [{text}]}] }
+    if provider == "gemini":
+        gemini_contents = []
+        for msg in raw_messages:
+            role = msg.get("role", "user")
+            gemini_role = "model" if role == "assistant" else role
+            gemini_contents.append({
+                "role": gemini_role,
+                "parts": [{"text": msg.get("content", "")}],
+            })
+        raw = {
+            "id":       conversation_id,
+            "model":    model,
+            "contents": gemini_contents,
+        }
+    else:
+        raw = {
+            "id":       conversation_id,
+            "model":    model,
+            "messages": raw_messages,
+        }
+    normalised = dispatch_normalize(raw, provider=provider)
 
     if not normalised:
         raise ValueError(
@@ -199,7 +230,7 @@ async def handle_memory_write(
     request = WriteRequest(
         userId=user_id,
         conversationId=conversation_id,
-        provider="claude",
+        provider=provider,
         model=model,
         messages=message_ins,
     )

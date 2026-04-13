@@ -36,7 +36,7 @@ from ...models.requests import (
     MessageIn,
     WriteRequest,
 )
-from ...services.write_service import write_conversation_to_graph
+from ...services.write_service import check_storage_cap, write_conversation_to_graph
 from ..dependencies import CurrentUserId, Neo4jDriver, OpenAIClient, RedisClient
 from ..limiter import limiter
 
@@ -83,6 +83,9 @@ async def chatgpt_write(
                 f"request userId '{body.userId}'."
             ),
         )
+
+    # Phase 6: enforce storage cap before queuing background task
+    await check_storage_cap(driver, current_user_id)
 
     # Resolve conversationId — generate if not provided
     conversation_id = body.conversationId or str(uuid.uuid4())

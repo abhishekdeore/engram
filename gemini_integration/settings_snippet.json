@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "engram-memory": {
+      "command": "uv",
+      "args": ["run", "--directory", "/ABSOLUTE/PATH/TO/cross-llm-memory", "engram-mcp"],
+      "env": {
+        "ENGRAM_API_URL": "https://engram-production-d6d1.up.railway.app",
+        "ENGRAM_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}

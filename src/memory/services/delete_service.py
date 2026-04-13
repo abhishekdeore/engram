@@ -124,8 +124,10 @@ async def _delete_conversation_tx(
     if record is None:
         return None
 
-    # Delete Chunks first
-    await tx.run(
+    total_deleted = 0
+
+    # 1. Delete Chunks first (innermost nodes)
+    r = await tx.run(
         """
         MATCH (c:Conversation {conversationId: $conversationId, userId: $userId})
         MATCH (c)-[:HAS_MESSAGE]->(m:Message)-[:HAS_CHUNK]->(ch:Chunk)
@@ -134,9 +136,11 @@ async def _delete_conversation_tx(
         conversationId=conversation_id,
         userId=user_id,
     )
+    summary = await r.consume()
+    total_deleted += summary.counters.nodes_deleted
 
-    # Delete Messages
-    await tx.run(
+    # 2. Delete Messages
+    r = await tx.run(
         """
         MATCH (c:Conversation {conversationId: $conversationId, userId: $userId})
         MATCH (c)-[:HAS_MESSAGE]->(m:Message)
@@ -145,9 +149,11 @@ async def _delete_conversation_tx(
         conversationId=conversation_id,
         userId=user_id,
     )
+    summary = await r.consume()
+    total_deleted += summary.counters.nodes_deleted
 
-    # Delete Segments
-    await tx.run(
+    # 3. Delete Segments
+    r = await tx.run(
         """
         MATCH (c:Conversation {conversationId: $conversationId, userId: $userId})
         MATCH (c)-[:HAS_SEGMENT]->(s:Segment)
@@ -156,9 +162,11 @@ async def _delete_conversation_tx(
         conversationId=conversation_id,
         userId=user_id,
     )
+    summary = await r.consume()
+    total_deleted += summary.counters.nodes_deleted
 
-    # Delete Conversation node; capture summary for node count
-    del_result = await tx.run(
+    # 4. Delete Conversation node
+    r = await tx.run(
         """
         MATCH (c:Conversation {conversationId: $conversationId, userId: $userId})
         DETACH DELETE c
@@ -166,15 +174,10 @@ async def _delete_conversation_tx(
         conversationId=conversation_id,
         userId=user_id,
     )
-    summary = await del_result.consume()
-    # summary.counters.nodes_deleted already includes the Conversation node.
-    # The prior three statements (Chunks, Messages, Segments) are not counted
-    # here — their summaries were not captured. The total is therefore a lower
-    # bound, but it is never inflated. The route surfaces this as informational
-    # metadata only, not as a guarantee.
-    nodes_deleted = summary.counters.nodes_deleted
+    summary = await r.consume()
+    total_deleted += summary.counters.nodes_deleted
 
-    return (nodes_deleted,)
+    return (total_deleted,)
 
 
 async def _delete_user_data_tx(

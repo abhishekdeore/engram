@@ -4,12 +4,16 @@ FastAPI dependencies — reusable, injectable building blocks.
 Injected via Depends() into route handlers.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..auth.jwt_handler import decode_access_token
+from ..auth.jwt_handler import decode_access_token_full
+from ..auth.revocation import is_token_revoked
+
+logger = logging.getLogger(__name__)
 
 # ── Bearer token extractor ────────────────────────────────────────────────────
 
@@ -17,22 +21,36 @@ _bearer = HTTPBearer(auto_error=True)
 
 
 async def get_current_user_id(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
 ) -> str:
     """
     Extract and verify the Bearer JWT from the Authorization header.
     Returns the userId (sub claim) on success.
-    Raises HTTP 401 on any auth failure.
+    Raises HTTP 401 on any auth failure, including revoked tokens.
     """
     try:
-        user_id = decode_access_token(credentials.credentials)
-    except ValueError as exc:
+        payload = decode_access_token_full(credentials.credentials)
+    except ValueError:
+        # Phase 6: generic message — never leak JWT decode details
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
+            detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-    return user_id
+        )
+
+    # Phase 7: Check token deny-list if jti is present
+    jti = payload.get("jti")
+    if jti:
+        redis_client = getattr(request.app.state, "redis_client", None)
+        if await is_token_revoked(redis_client, jti):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    return payload["sub"]
 
 
 # ── Neo4j driver accessor ─────────────────────────────────────────────────────
